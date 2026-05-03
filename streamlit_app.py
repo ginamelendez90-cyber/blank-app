@@ -2,91 +2,135 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="App Prestamista Pro", page_icon="📈", layout="wide")
+# Configuración para que se vea como App nativa
+st.set_page_config(page_title="PrestApp", page_icon="📲", layout="centered")
 
-st.title("🏦 Control de Préstamos y Cobranza")
+# --- DISEÑO DE INTERFAZ (CSS) ---
+st.markdown("""
+    <style>
+    /* Fondo y tipografía */
+    .stApp { background-color: #F2F2F7; }
+    h1 { color: #1C1C1E; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-weight: 700; }
+    
+    /* Botones principales estilo iOS */
+    div.stButton > button {
+        background-color: #007AFF;
+        color: white;
+        border-radius: 12px;
+        border: none;
+        height: 3.5rem;
+        font-size: 16px;
+        font-weight: 600;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: all 0.2s ease;
+    }
+    div.stButton > button:active { transform: scale(0.98); }
 
+    /* Tarjetas de Métricas */
+    [data-testid="stMetric"] {
+        background-color: white;
+        border-radius: 16px;
+        padding: 15px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        border: 1px solid #E5E5EA;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# Inicializar sesión
 if 'data' not in st.session_state:
     st.session_state.data = pd.DataFrame(columns=[
-        'Cliente', 'Monto Inicial', 'Interés %', 'Total a Pagar', 
-        'Método', 'Cuota $', 'Pagado', 'Saldo Pendiente', 'Vencimiento'
+        'Cliente', 'Monto Inicial', 'Total', 'Cuota', 'Frecuencia', 'Pagado', 'Saldo', 'Vence'
     ])
 
-# --- SECCIÓN 1: REGISTRO CON CÁLCULO DE CUOTAS ---
-with st.expander("➕ Registrar Nuevo Préstamo"):
-    with st.form("registro"):
-        col1, col2 = st.columns(2)
-        with col1:
-            cliente = st.text_input("Nombre del Cliente").upper()
-            monto = st.number_input("Monto Prestado ($)", min_value=0.0, step=50.0)
-            tasa = st.number_input("Tasa de Interés (%)", min_value=0.0, value=20.0)
-            
-        with col2:
-            metodo = st.selectbox("Frecuencia de Pago", ["Diario", "Semanal"])
-            plazo_tiempo = st.number_input(f"¿Cuántos/as {metodo}s?", min_value=1, value=4)
+# --- VENTANA FLOTANTE: NUEVO CLIENTE ---
+@st.dialog("📝 Nuevo Préstamo")
+def modal_nuevo_cliente():
+    st.write("Complete los datos del crédito")
+    with st.form("registro_form", clear_on_submit=True):
+        nombre = st.text_input("Nombre del Cliente").upper()
+        monto = st.number_input("Cantidad prestada ($)", min_value=0, step=100)
+        tasa = st.slider("Interés (%)", 0, 100, 20)
         
-        if st.form_submit_button("Calcular y Guardar"):
-            total_pagar = monto * (1 + (tasa / 100))
-            # Cálculo de la cuota según el método
-            cuota = total_pagar / plazo_tiempo
+        c1, c2 = st.columns(2)
+        with c1:
+            metodo = st.selectbox("Frecuencia", ["Diario", "Semanal"])
+        with c2:
+            cuotas = st.number_input("N° Cuotas", min_value=1, value=20)
             
-            # Cálculo de fecha de vencimiento
-            dias_totales = plazo_tiempo if metodo == "Diario" else plazo_tiempo * 7
-            vencimiento = (datetime.now() + timedelta(days=dias_totales)).strftime('%Y-%m-%d')
+        if st.form_submit_button("CREAR PRÉSTAMO"):
+            total = monto * (1 + (tasa/100))
+            valor_cuota = total / cuotas
+            dias = cuotas if metodo == "Diario" else cuotas * 7
+            vencimiento = (datetime.now() + timedelta(days=dias)).strftime('%d/%m/%Y')
             
-            nuevo = pd.DataFrame([{
-                'Cliente': cliente,
-                'Monto Inicial': monto,
-                'Interés %': tasa,
-                'Total a Pagar': total_pagar,
-                'Método': metodo,
-                'Cuota $': round(cuota, 2),
-                'Pagado': 0.0,
-                'Saldo Pendiente': total_pagar,
-                'Vencimiento': vencimiento
+            nuevo_p = pd.DataFrame([{
+                'Cliente': nombre, 'Monto Inicial': monto, 'Total': total,
+                'Cuota': round(valor_cuota, 2), 'Frecuencia': metodo,
+                'Pagado': 0.0, 'Saldo': total, 'Vence': vencimiento
             }])
-            
-            st.session_state.data = pd.concat([st.session_state.data, nuevo], ignore_index=True)
-            st.success(f"✅ ¡Guardado! El cliente pagará {plazo_tiempo} cuotas de ${round(cuota, 2)} ({metodo})")
+            st.session_state.data = pd.concat([st.session_state.data, nuevo_p], ignore_index=True)
+            st.success("✅ Registro exitoso")
+            st.rerun()
 
-# --- SECCIÓN 2: COBRO RÁPIDO ---
-with st.expander("💸 Registrar Cobro de Cuota"):
-    if not st.session_state.data.empty:
-        c_pago = st.selectbox("Cliente que paga:", st.session_state.data['Cliente'].unique())
-        # Sugerir el monto de la cuota automáticamente
-        idx_c = st.session_state.data[st.session_state.data['Cliente'] == c_pago].index[0]
-        cuota_sugerida = st.session_state.data.at[idx_c, 'Cuota $']
-        
-        monto_recibido = st.number_input("Monto recibido ($)", value=float(cuota_sugerida))
-        
-        if st.button("Confirmar Cobro"):
-            st.session_state.data.at[idx_c, 'Pagado'] += monto_recibido
-            st.session_state.data.at[idx_c, 'Saldo Pendiente'] -= monto_recibido
-            st.success(f"Cobro de ${monto_recibido} registrado para {c_pago}")
-    else:
-        st.info("No hay préstamos activos.")
-
-# --- SECCIÓN 3: LISTA DE COBRANZA ---
-st.divider()
-st.subheader("📝 Hoja de Ruta de Cobros")
-
-if not st.session_state.data.empty:
-    # Filtro rápido para ver quién debe hoy
-    busqueda = st.text_input("🔍 Buscar cliente por nombre")
-    df_mostrar = st.session_state.data
-    if busqueda:
-        df_mostrar = df_mostrar[df_mostrar['Cliente'].str.contains(busqueda.upper())]
-
-    # Resumen visual
-    st.dataframe(df_mostrar.style.format({
-        'Monto Inicial': '${:,.2f}',
-        'Total a Pagar': '${:,.2f}',
-        'Cuota $': '${:,.2f}',
-        'Pagado': '${:,.2f}',
-        'Saldo Pendiente': '${:,.2f}'
-    }), use_container_width=True)
+# --- VENTANA FLOTANTE: COBRAR ---
+@st.dialog("💰 Registrar Cobro")
+def modal_cobrar():
+    if st.session_state.data.empty:
+        st.error("No hay clientes activos.")
+        return
     
-    # Resumen de caja
-    c1, c2 = st.columns(2)
-    c1.metric("Recaudado Total", f"${st.session_state.data['Pagado'].sum():,.2f}")
-    c2.metric("Pendiente por Cobrar", f"${st.session_state.data['Saldo Pendiente'].sum():,.2f}")
+    cliente_sel = st.selectbox("¿Quién paga?", st.session_state.data['Cliente'].unique())
+    idx = st.session_state.data[st.session_state.data['Cliente'] == cliente_sel].index[0]
+    sugerido = st.session_state.data.at[idx, 'Cuota']
+    
+    monto_abono = st.number_input("Monto del abono ($)", value=float(sugerido))
+    
+    if st.button("PROCESAR PAGO"):
+        st.session_state.data.at[idx, 'Pagado'] += monto_abono
+        st.session_state.data.at[idx, 'Saldo'] -= monto_abono
+        st.balloons()
+        st.success(f"Abono de ${monto_abono} registrado.")
+        st.rerun()
+
+# --- INTERFAZ PRINCIPAL ---
+st.title("Mi Cartera")
+st.caption("Gestión administrativa de préstamos personales")
+
+# Panel de Botones (Acciones Rápidas)
+col_btn1, col_btn2 = st.columns(2)
+with col_btn1:
+    if st.button("➕ Nuevo"):
+        modal_nuevo_cliente()
+with col_btn2:
+    if st.button("💸 Cobrar"):
+        modal_cobrar()
+
+st.write("") # Espaciador
+
+# Métricas de la App
+m1, m2 = st.columns(2)
+total_calle = st.session_state.data['Saldo'].sum()
+total_clientes = len(st.session_state.data)
+
+m1.metric("Dinero en Calle", f"${total_calle:,.0f}")
+m2.metric("Total Clientes", f"{total_clientes}")
+
+st.divider()
+
+# Listado de Cobranza con buscador
+st.subheader("📋 Lista de Cobro")
+if not st.session_state.data.empty:
+    search = st.text_input("🔍 Buscar por nombre...")
+    df_v = st.session_state.data
+    if search:
+        df_v = df_v[df_v['Cliente'].str.contains(search.upper())]
+    
+    # Tabla optimizada para lectura rápida
+    st.dataframe(
+        df_v[['Cliente', 'Cuota', 'Saldo', 'Vence']],
+        use_container_width=True,
+        hide_index=True
+    )
+else:
+    st.info("No hay préstamos registrados. Empieza tocando el botón 'Nuevo'.")
