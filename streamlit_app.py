@@ -8,6 +8,7 @@ import urllib.parse
 # Reemplaza con tu ID de la URL de Google Sheets
 SHEET_ID = "1-g3icRDMsZu_L2nNHMRSHoPAU7n6k5hbZANUyV9WwEw" 
 GID_USUARIOS = "0"
+GID_PRESTAMOS = "539541529"
 
 # --- 2. ESTILO VISUAL ---
 st.set_page_config(page_title="PrestApp Elite Pro", page_icon="🏦", layout="wide")
