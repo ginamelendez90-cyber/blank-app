@@ -1,73 +1,77 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# --- CONFIGURACIÓN DE LA HOJA DE GOOGLE ---
-# Reemplaza esto con el ID que copiaste de tu URL de Google Sheets
-SHEET_ID = "https://docs.google.com/spreadsheets/d/1-g3icRDMsZu_L2nNHMRSHoPAU7n6k5hbZANUyV9WwEw/edit?usp=drivesdk"
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="PrestApp Cloud Elite", page_icon="☁️")
 
-def get_google_sheet_url(sheet_name):
-    return f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+# --- CONEXIÓN A LA NUBE ---
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- FUNCIONES DE PERSISTENCIA REAL ---
-def cargar_datos_nube(pestana):
-    try:
-        url = get_google_sheet_url(pestana)
-        return pd.read_csv(url)
-    except:
-        # Si la hoja está vacía o hay error, devuelve estructura básica
-        if pestana == "Usuarios":
-            return pd.DataFrame([{"ID": "admin", "Nombre": "Dueño", "Clave": "admin123", "Rol": "admin"}])
-        return pd.DataFrame()
+# Función para cargar usuarios desde Google Sheets
+def cargar_usuarios():
+    return conn.read(worksheet="Usuarios")
 
-# --- INICIO DE LA APP ---
-st.set_page_config(page_title="PrestApp Cloud", page_icon="☁️")
-
-# Carga inicial desde la nube
-if 'usuarios_db' not in st.session_state:
-    df_u = cargar_datos_nube("Usuarios")
-    st.session_state.usuarios_db = df_u.set_index('ID').to_dict('index')
+# Función para guardar un nuevo crédito en Google Sheets
+def guardar_prestamo_nube(nuevo_df):
+    existing_data = conn.read(worksheet="Prestamos")
+    updated_df = pd.concat([existing_data, nuevo_df], ignore_index=True)
+    conn.update(worksheet="Prestamos", data=updated_df)
+    st.cache_data.clear() # Limpia caché para ver cambios al instante
 
 # --- LÓGICA DE LOGIN ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.title("🔐 Acceso Remoto")
-    u = st.text_input("Usuario").strip()
-    p = st.text_input("Clave", type="password").strip()
+    st.title("🔐 Acceso Seguro")
+    u_log = st.text_input("Usuario ID").strip()
+    p_log = st.text_input("Contraseña", type="password").strip()
     
-    if st.button("CONECTAR"):
-        db = st.session_state.usuarios_db
-        if u in db and str(db[u]['Clave']) == p:
+    if st.button("ENTRAR AL SISTEMA"):
+        usuarios_df = cargar_usuarios()
+        # Buscamos si existe el ID y la Clave en el Excel
+        user_row = usuarios_df[(usuarios_df['ID'] == u_log) & (usuarios_df['Clave'].astype(str) == p_log)]
+        
+        if not user_row.empty:
             st.session_state.logged_in = True
-            st.session_state.user_id = u
+            st.session_state.u_data = user_row.iloc[0].to_dict()
             st.rerun()
         else:
-            st.error("Error de acceso")
+            st.error("❌ Credenciales incorrectas en la nube.")
     st.stop()
 
-# --- PANEL DE CONTROL (RESTRICCIONES) ---
-user = st.session_state.usuarios_db[st.session_state.user_id]
-es_admin = (user['Rol'] == "admin")
+# --- INTERFAZ POST-LOGIN ---
+u_actual = st.session_state.u_data
+es_admin = (u_actual['Rol'] == "admin")
 
-st.sidebar.title(f"☁️ Nube Activa")
-st.sidebar.write(f"Usuario: {user['Nombre']}")
+st.sidebar.success(f"Conectado: {u_actual['Nombre']}")
 
 if es_admin:
-    st.header("👑 Administración Central")
-    with st.expander("➕ CREAR CRÉDITO (Solo Admin)"):
+    st.header("👑 Panel de Administración")
+    
+    with st.expander("➕ CREAR NUEVO CRÉDITO"):
         cliente = st.text_input("Cliente")
-        monto = st.number_input("Monto", min_value=0)
-        # Aquí cargarías la lista de cobradores de la pestaña Usuarios
-        if st.button("Registrar en la Nube"):
-            st.success("Guardado en Google Sheets (Simulado)")
-            # Nota: Para escribir de vuelta a Google Sheets desde Streamlit 
-            # de forma automática se recomienda usar 'st.connection("gsheets")'
-else:
-    st.header("🛵 Panel de Cobrador")
-    st.info("Solo ves tus clientes asignados en la nube.")
+        monto = st.number_input("Monto $", min_value=0)
+        # Cargamos cobradores del Excel para asignar
+        todos_u = cargar_usuarios()
+        cobradores = todos_u[todos_u['Rol'] == 'cobrador']['ID'].tolist()
+        cob_asig = st.selectbox("Asignar a:", cobradores)
+        
+        if st.button("DESEMBOLSAR Y GUARDAR EN NUBE"):
+            id_p = datetime.now().strftime("%f")
+            nuevo_p = pd.DataFrame([{'ID': id_p, 'Cliente': cliente, 'Saldo': monto*1.2, 'Cobrador': cob_asig, 'Estado': 'Activo'}])
+            guardar_prestamo_nube(nuevo_p)
+            st.success("✅ Crédito registrado en Google Sheets")
 
-if st.button("Cerrar Sesión"):
+else:
+    st.header(f"🛵 Ruta: {u_actual['Nombre']}")
+    # Los cobradores solo ven sus clientes desde el Excel
+    all_p = conn.read(worksheet="Prestamos")
+    mis_p = all_p[(all_p['Cobrador'] == u_actual['ID']) & (all_p['Estado'] == 'Activo')]
+    st.dataframe(mis_p[['Cliente', 'Saldo']])
+
+if st.sidebar.button("Cerrar Sesión"):
     st.session_state.logged_in = False
     st.rerun()
