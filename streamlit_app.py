@@ -4,15 +4,14 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="PrestApp Elite", page_icon="💰", layout="centered")
 
-# --- DISEÑO Y ESTILO ENFÁTICO ---
+# --- DISEÑO Y ESTILO ---
 st.markdown("""
     <style>
     .stApp { background-color: #F2F2F7; }
     .card-caja { background-color: #1c1c1e; padding: 25px; border-radius: 20px; color: #32D74B; text-align: center; border: 2px solid #32D74B; }
     .card-calle { background-color: white; padding: 25px; border-radius: 20px; color: #FF453A; text-align: center; border: 2px solid #FF453A; }
-    div.stButton > button { background-color: #007AFF; color: white; border-radius: 12px; height: 3.5rem; font-weight: 700; font-size: 18px; }
-    .movimiento-positivo { color: #28a745; font-weight: bold; }
-    .movimiento-negativo { color: #dc3545; font-weight: bold; }
+    /* Estilo para los botones de la pantalla principal */
+    .main-btn div.stButton > button { background-color: #007AFF; color: white; border-radius: 12px; height: 4rem; font-weight: 700; font-size: 18px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -30,7 +29,7 @@ if 'movimientos' not in st.session_state:
 caja_real = st.session_state.capital + st.session_state.recuperado - st.session_state.prestado - st.session_state.gastos_acum
 en_la_calle = st.session_state.data['Saldo'].sum()
 
-# --- VENTANAS FLOTANTES (MISMOS DIÁLOGOS) ---
+# --- MODALES (VENTANAS FLOTANTES) ---
 @st.dialog("➕ Nuevo Préstamo")
 def modal_prestamo():
     nombre = st.text_input("Nombre del Cliente").upper()
@@ -40,7 +39,7 @@ def modal_prestamo():
     with c1: frec = st.selectbox("Frecuencia", ["Diario", "Semanal"])
     with c2: cuotas = st.number_input("N° Cuotas", min_value=1, value=20)
     if st.button("CONFIRMAR PRÉSTAMO"):
-        if monto > caja_real: st.error("Fondos insuficientes en caja.")
+        if monto > caja_real: st.error("Fondos insuficientes.")
         elif nombre:
             total = monto * (1 + (tasa/100))
             venc = (datetime.now() + timedelta(days=cuotas if frec=="Diario" else cuotas*7)).strftime('%d/%m/%y')
@@ -54,9 +53,9 @@ def modal_prestamo():
 @st.dialog("💰 Cobrar Cuota")
 def modal_cobro():
     if st.session_state.data.empty: return
-    cli = st.selectbox("Seleccione Cliente", st.session_state.data['Cliente'].unique())
+    cli = st.selectbox("Cliente", st.session_state.data['Cliente'].unique())
     idx = st.session_state.data[st.session_state.data['Cliente'] == cli].index[0]
-    monto = st.number_input("Monto Recibido ($)", value=float(st.session_state.data.at[idx, 'Cuota']))
+    monto = st.number_input("Monto Recibido", value=float(st.session_state.data.at[idx, 'Cuota']))
     if st.button("REGISTRAR PAGO"):
         st.session_state.data.at[idx, 'Saldo'] -= monto
         st.session_state.recuperado += monto
@@ -64,9 +63,9 @@ def modal_cobro():
         st.session_state.movimientos = pd.concat([st.session_state.movimientos, m], ignore_index=True)
         st.rerun()
 
-@st.dialog("📉 Gasto")
+@st.dialog("📉 Gasto Administrativo")
 def modal_gasto():
-    det = st.text_input("Concepto")
+    det = st.text_input("Concepto del Gasto")
     val = st.number_input("Valor ($)", min_value=0.0)
     if st.button("GUARDAR GASTO"):
         st.session_state.gastos_acum += val
@@ -74,60 +73,59 @@ def modal_gasto():
         st.session_state.movimientos = pd.concat([st.session_state.movimientos, m], ignore_index=True)
         st.rerun()
 
-@st.dialog("🏦 Capital")
+@st.dialog("🏦 Inyección de Capital")
 def modal_cap():
-    m = st.number_input("Monto ($)", min_value=0.0)
-    if st.button("INYECTAR"):
+    m = st.number_input("Monto a Inyectar ($)", min_value=0.0)
+    if st.button("CONFIRMAR INYECCIÓN"):
         st.session_state.capital += m
         m = pd.DataFrame([{'Fecha': datetime.now().strftime("%H:%M"), 'Tipo': '🟢 CAPITAL', 'Detalle': 'Inyección', 'Monto': m}])
         st.session_state.movimientos = pd.concat([st.session_state.movimientos, m], ignore_index=True)
         st.rerun()
 
+# --- MENÚ LATERAL (LAS "3 RAYITAS") ---
+with st.sidebar:
+    st.title("Configuración")
+    st.write("Gestión de Fondos")
+    if st.button("🏦 Inyectar Capital"):
+        modal_cap()
+    if st.button("📉 Registrar Gasto"):
+        modal_gasto()
+    st.divider()
+    st.info("Usa este menú para administrar el dinero base y los gastos operativos.")
+
 # --- INTERFAZ PRINCIPAL ---
 st.title("PrestApp Elite 🏦")
 
-# Dashboard de Totales
 col_a, col_b = st.columns(2)
 with col_a: st.markdown(f'<div class="card-caja"><small>DISPONIBLE</small><br><h2>${caja_real:,.0f}</h2></div>', unsafe_allow_html=True)
 with col_b: st.markdown(f'<div class="card-calle"><small>EN LA CALLE</small><br><h2>${en_la_calle:,.0f}</h2></div>', unsafe_allow_html=True)
 
 st.write("")
-c1, c2, c3, c4 = st.columns(4)
+# Botones Principales más grandes
+st.markdown('<div class="main-btn">', unsafe_allow_html=True)
+c1, c2 = st.columns(2)
 with c1: 
-    if st.button("➕"): modal_prestamo()
+    if st.button("➕ NUEVO"): modal_prestamo()
 with c2: 
-    if st.button("💰"): modal_cobro()
-with c3: 
-    if st.button("📉"): modal_gasto()
-with c4: 
-    if st.button("🏦"): modal_cap()
+    if st.button("💰 COBRAR"): modal_cobro()
+st.markdown('</div>', unsafe_allow_html=True)
 
 st.divider()
 
-# --- SECCIONES ENFÁTICAS ---
+# --- CARTERA Y MOVIMIENTOS ---
 st.subheader("📋 CARTERA ACTIVA")
 if not st.session_state.data.empty:
-    # Usamos st.dataframe con configuración de columnas para resaltar
-    st.dataframe(
-        st.session_state.data.style.background_gradient(cmap='Reds', subset=['Saldo']),
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(st.session_state.data, use_container_width=True, hide_index=True)
 else:
-    st.info("No hay clientes en cartera.")
+    st.info("Sin clientes activos.")
 
-st.write("")
-st.subheader("🕒 MOVIMIENTOS DE HOY")
+st.subheader("🕒 MOVIMIENTOS RECIENTES")
 if not st.session_state.movimientos.empty:
-    for index, row in st.session_state.movimientos.iloc[::-1].head(8).iterrows():
-        color = "green" if row['Monto'] > 0 else "red"
-        icon = "➕" if row['Monto'] > 0 else "➖"
-        with st.container():
-            st.markdown(f"""
-            <div style="background-color: white; padding: 10px; border-radius: 10px; margin-bottom: 5px; border-left: 5px solid {color};">
-                <small>{row['Fecha']}</small> | <strong>{row['Tipo']}</strong>: {row['Detalle']} <br>
-                <span style="color:{color}; font-weight:bold;">{icon} ${abs(row['Monto']):,.2f}</span>
-            </div>
-            """, unsafe_allow_html=True)
-else:
-    st.write("No hay movimientos registrados hoy.")
+    for _, row in st.session_state.movimientos.iloc[::-1].head(5).iterrows():
+        color = "#32D74B" if row['Monto'] > 0 else "#FF453A"
+        st.markdown(f"""
+        <div style="background-color: white; padding: 12px; border-radius: 15px; margin-bottom: 8px; border-left: 6px solid {color}; shadow: 0 2px 4px rgba(0,0,0,0.05);">
+            <small style="color: gray;">{row['Fecha']}</small> | <strong>{row['Tipo']}</strong><br>
+            {row['Detalle']} <span style="float: right; color:{color}; font-weight:bold;">${abs(row['Monto']):,.0f}</span>
+        </div>
+        """, unsafe_allow_html=True)
