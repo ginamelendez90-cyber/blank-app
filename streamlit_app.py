@@ -5,7 +5,7 @@ import urllib.parse
 
 # --- 1. CONFIGURACIÓN DEL GOOGLE SHEET ---
 # REEMPLAZA ESTE ID con el código largo de tu URL
-SHEET_ID = "g3icRDMsZu"
+SHEET_ID = "1-g3icRDMsZu_L2nNHMRSHoPAU7n6k5hbZANUyV9WwEw"
 
 def obtener_url(pestana):
     # Pestaña Usuarios suele ser gid=0, Prestamos gid= (ver en tu URL de Google)
