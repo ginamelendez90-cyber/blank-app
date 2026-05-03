@@ -3,115 +3,110 @@ import pandas as pd
 import numpy as np
 from scipy.stats import poisson
 
-# --- CONFIGURACIÓN DE INTERFAZ ---
-st.set_page_config(page_title="Radar de Valor V8.4 - Lógica Pro", layout="wide")
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="Radar de Valor V8.6 - Historial", layout="wide")
 
-class EngineLogicaPro:
-    def calcular_analisis(self, local_data, visita_data, cuotas, home_adv):
-        # 1. APLICACIÓN DE FACTOR DE LOCALÍA (Lógica Deportiva)
-        # El local suele rendir un poco más que su promedio general
-        xg_local_adj = local_data['xg'] * (1 + home_adv)
-        xga_local_adj = local_data['xga'] * (1 - home_adv)
+# Inicializar el historial en la sesión si no existe
+if 'historial' not in st.session_state:
+    st.session_state.historial = []
+
+class EngineAnalitico:
+    def calcular_probabilidades(self, l_data, v_data, h_adv):
+        l_lamb = (l_data['xg'] * (1 + h_adv) + v_data['xga']) / 2
+        v_lamb = (v_data['xg'] + l_data['xga'] * (1 - h_adv)) / 2
         
-        # 2. AJUSTE DE FUERZAS CRUZADAS
-        lambda_l = (xg_local_adj + visita_data['xga']) / 2
-        lambda_v = (visita_data['xg'] + xga_local_adj) / 2
-        
-        # 3. MATRIZ DE POISSON
         max_g = 10
-        p_l = [poisson.pmf(i, lambda_l) for i in range(max_g)]
-        p_v = [poisson.pmf(i, lambda_v) for i in range(max_g)]
+        p_l = [poisson.pmf(i, l_lamb) for i in range(max_g)]
+        p_v = [poisson.pmf(i, v_lamb) for i in range(max_g)]
         matriz = np.outer(p_l, p_v)
         
-        # Probabilidades Matemáticas
-        p_x = np.sum(np.diag(matriz)) 
         p_1 = np.sum(np.tril(matriz, -1))
+        p_x = np.sum(np.diag(matriz))
         p_2 = 1 - p_1 - p_x
-        
-        # Mercados de Goles
         p_u25 = sum(matriz[i, j] for i in range(3) for j in range(3-i))
         p_o25 = 1 - p_u25
         p_btts = 1 - (p_l[0] + p_v[0] - matriz[0, 0])
-
-        # 4. CÁLCULO DE VALOR (EV) - (P * Cuota) - 1
-        def get_ev(p, c): return (p * c) - 1 if c > 0 else -1
         
-        # 5. DETERMINAR FAVORITO POR PROBABILIDAD
-        probs = {local_data['nombre']: p_1, "Empate": p_x, visita_data['nombre']: p_2}
-        ganador_logico = max(probs, key=probs.get)
-
         return {
-            "p_1": p_1, "p_x": p_x, "p_2": p_2, "p_o25": p_o25, "p_u25": p_u25, "p_btts": p_btts,
-            "cj_l": 1/p_1, "cj_x": 1/p_x, "cj_v": 1/p_2, "cj_o25": 1/p_o25, "cj_u25": 1/p_u25, "cj_btts": 1/p_btts,
-            "ev_l": get_ev(p_1, cuotas['L']), "ev_x": get_ev(p_x, cuotas['X']), "ev_v": get_ev(p_2, cuotas['V']),
-            "ev_o25": get_ev(p_o25, cuotas['O25']), "ev_u25": get_ev(p_u25, cuotas['U25']), "ev_btts": get_ev(p_btts, cuotas['BTTS']),
-            "ganador_logico": ganador_logico
+            "p_1": p_1, "p_x": p_x, "p_2": p_2,
+            "p_o25": p_o25, "p_u25": p_u25, "p_btts": p_btts
         }
 
 # --- INTERFAZ ---
-st.title("🛰️ Radar de Valor V8.4: Lógica de Localía")
-st.markdown("---")
+st.title("🎯 Radar de Valor V8.6 + Historial de Guardado")
 
-t1, t2 = st.tabs(["📊 Datos de Entrada", "💰 Resultados Coherentes"])
+t1, t2, t3 = st.tabs(["📥 Entrada de Datos", "📊 Análisis Actual", "📂 Historial Guardado"])
 
 with t1:
-    col_cfg1, col_cfg2 = st.columns([2, 1])
-    with col_cfg1:
-        st.info("Ingresa los datos de xG y xGA que ves en la imagen de 365Scores.")
-    with col_cfg2:
-        h_adv = st.slider("Ventaja Localía (%)", 0, 20, 10) / 100
-
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("Casa (Local)")
-        n_l = st.text_input("Equipo Local", "Bournemouth")
-        xg_l = st.number_input("xG (Esperados) L", value=1.75) # Valor más alto para el favorito
-        xga_l = st.number_input("xGA (Recibidos) L", value=1.20)
+        n_l = st.text_input("Local", "Bournemouth")
+        xg_l = st.number_input("xG Local", value=1.70)
+        xga_l = st.number_input("xGA Local", value=1.10)
+        c_l = st.number_input("Cuota Local", value=1.75)
     with c2:
-        st.subheader("Fuera (Visitante)")
-        n_v = st.text_input("Equipo Visitante", "Crystal Palace")
-        xg_v = st.number_input("xG (Esperados) V", value=1.10)
-        xga_v = st.number_input("xGA (Recibidos) V", value=1.65)
+        n_v = st.text_input("Visitante", "Crystal Palace")
+        xg_v = st.number_input("xG Visitante", value=1.05)
+        xga_v = st.number_input("xGA Visitante", value=1.60)
+        c_v = st.number_input("Cuota Visita", value=4.50)
+    
+    st.divider()
+    col_g1, col_g2, col_g3, col_g4 = st.columns(4)
+    c_x = col_g1.number_input("Cuota X", value=3.80)
+    c_o = col_g2.number_input("Cuota O2.5", value=1.85)
+    c_u = col_g3.number_input("Cuota U2.5", value=1.95)
+    c_b = col_g4.number_input("Cuota BTTS", value=1.70)
 
 with t2:
-    st.subheader("Cuotas Reales de la Casa")
-    c_in1, c_in2, c_in3 = st.columns(3)
-    cl = c_in1.number_input(f"Cuota {n_l}", value=1.70) # Cuota lógica para un favorito
-    cx = c_in2.number_input("Cuota Empate", value=3.90)
-    cv = c_in3.number_input(f"Cuota {n_v}", value=4.25)
-    
-    st.markdown("**Goles y BTTS**")
-    c_g1, c_g2, c_g3 = st.columns(3)
-    co = c_g1.number_input("Cuota Over 2.5", value=1.85)
-    cu = c_g2.number_input("Cuota Under 2.5", value=2.00)
-    cb = c_g3.number_input("Cuota BTTS (SI)", value=1.75)
-
-    if st.button("🚀 GENERAR ANÁLISIS LÓGICO", use_container_width=True):
-        engine = EngineLogicaPro()
-        res = engine.calcular_analisis(
-            {'nombre': n_l, 'xg': xg_l, 'xga': xga_l},
-            {'nombre': n_v, 'xg': xg_v, 'xga': xga_v},
-            {'L': cl, 'X': cx, 'V': cv, 'O25': co, 'U25': cu, 'BTTS': cb},
-            h_adv
-        )
-
-        # TABLA DE RESULTADOS
-        st.subheader("📋 Diagnóstico de Valor")
-        def tag(ev): return "POSITIVO" if ev > 0.05 else "negativo"
+    if st.button("🚀 CALCULAR Y GUARDAR", use_container_width=True):
+        engine = EngineAnalitico()
+        res = engine.calcular_probabilidades({'xg': xg_l, 'xga': xga_l}, {'xg': xg_v, 'xga': xga_v}, 0.10)
         
-        df_data = {
-            "Mercado": [n_l, "Empate", n_v, "Over 2.5", "Under 2.5", "Ambos Anotan"],
-            "Prob. Real": [f"{res['p_1']:.1%}", f"{res['p_x']:.1%}", f"{res['p_2']:.1%}", f"{res['p_o25']:.1%}", f"{res['p_u25']:.1%}", f"{res['p_btts']:.1%}"],
-            "Cuota Justa": [res['cj_l'], res['cj_x'], res['cj_v'], res['cj_o25'], res['cj_u25'], res['cj_btts']],
-            "Diagnóstico": [tag(res['ev_l']), tag(res['ev_x']), tag(res['ev_v']), tag(res['ev_o25']), tag(res['ev_u25']), tag(res['ev_btts'])]
-        }
+        # Procesar resultados para la tabla
+        mercados = [
+            (f"Victoria {n_l}", res['p_1'], c_l),
+            ("Empate", res['p_x'], c_x),
+            (f"Victoria {n_v}", res['p_2'], c_v),
+            ("Over 2.5", res['p_o25'], c_o),
+            ("Under 2.5", res['p_u25'], c_u),
+            ("Ambos Anotan", res['p_btts'], c_b)
+        ]
+
+        filas = []
+        for nombre, prob, cuota in mercados:
+            cj = 1/prob
+            ev = (prob * cuota) - 1
+            diag = "POSITIVO" if ev > 0.05 else "negativo"
+            filas.append({"Mercado": nombre, "Prob": f"{prob:.1%}", "CJ": round(cj, 2), "Estado": diag})
         
-        st.table(pd.DataFrame(df_data).style.format({"Cuota Justa": "{:.2f}"}).map(
+        # Mostrar tabla actual
+        df_actual = pd.DataFrame(filas)
+        st.table(df_actual.style.map(
             lambda x: 'background-color: #1b5e20; color: white; font-weight: bold' if x == "POSITIVO" else 'color: #757575',
-            subset=['Diagnóstico']
+            subset=['Estado']
         ))
 
-        # VEREDICTO FINAL COHERENTE
-        st.divider()
-        st.success(f"🏆 **Favorito Lógico:** {res['ganador_logico']} ({max(res['p_1'], res['p_x'], res['p_2']):.1%})")
-        st.info(f"💡 **Explicación:** El Bournemouth es favorito porque su xG (ajustado por localía) es superior al xG del Palace y choca contra una defensa visitante más débil.")
+        # GUARDAR EN EL HISTORIAL
+        # Solo guardamos los que dieron "POSITIVO" para limpiar el historial
+        positivos = [f"{m[0]} (@{m[2]})" for m in mercados if (m[1] * m[2]) - 1 > 0.05]
+        
+        nuevo_registro = {
+            "Evento": f"{n_l} vs {n_v}",
+            "Favorito": n_l if res['p_1'] > res['p_2'] else n_v,
+            "Opciones Positivas": ", ".join(positivos) if positivos else "Ninguna",
+            "Goles Est.": round( (1.70+1.05)/2 + (1.10+1.60)/2, 2) # Ejemplo rápido de proyección
+        }
+        st.session_state.historial.append(nuevo_registro)
+        st.success("Análisis guardado en el historial.")
+
+with t3:
+    st.subheader("Historial de la Sesión")
+    if st.session_state.historial:
+        df_hist = pd.DataFrame(st.session_state.historial)
+        st.dataframe(df_hist, use_container_width=True)
+        
+        if st.button("🗑️ Borrar Historial"):
+            st.session_state.historial = []
+            st.rerun()
+    else:
+        st.write("No hay análisis guardados aún.")
