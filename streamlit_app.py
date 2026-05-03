@@ -9,7 +9,7 @@ SHEET_ID = "1-g3icRDMsZu_L2nNHMRSHoPAU7n6k5hbZANUyV9WwEw"
 
 def obtener_url(pestana):
     # Pestaña Usuarios suele ser gid=0, Prestamos gid= (ver en tu URL de Google)
-    gid = "0" if pestana == "Usuarios" else "TU_GID_DE_PRESTAMOS" 
+    gid = "0" if pestana == "Usuarios" else "539541529" 
     return f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={gid}"
 
 # --- 2. CARGA DE DATOS ---
