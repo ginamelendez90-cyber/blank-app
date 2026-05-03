@@ -7,7 +7,7 @@ import urllib.parse
 # --- 1. CONEXIÓN ---
 @st.cache_resource
 def init_connection():
-    url = st.secrets["https://netrbgledrnsjjuyhpui.supabase.co"]
+    url = st.secrets["https://netrbgledrnsjjuyhpui.supabase.co/rest/v1/"]
     key = st.secrets["sb_publishable_qH4a5QFumA-zqXfhZD6l-w_r5gTLRie"]
     return create_client(url, key)
 
