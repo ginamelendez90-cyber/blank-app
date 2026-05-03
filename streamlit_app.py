@@ -170,3 +170,48 @@ if not df_p.empty:
     st.dataframe(filtro_tabla[['Cliente', 'Saldo', 'Cuota', 'Cobrador']], use_container_width=True)
 else:
     st.error("No se encontraron datos en la base de datos de Google.")
+
+# --- FUNCIÓN PARA GUARDAR EN LA NUBE ---
+def guardar_nuevo_prestamo(nuevo_registro):
+    try:
+        # 1. Establecer conexión de escritura
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        
+        # 2. Leer lo que hay actualmente en la pestaña Prestamos
+        df_existente = conn.read(worksheet="Prestamos")
+        
+        # 3. Concatenar el nuevo registro
+        df_actualizado = pd.concat([df_existente, nuevo_registro], ignore_index=True)
+        
+        # 4. Subir la tabla completa de vuelta
+        conn.update(worksheet="Prestamos", data=df_actualizado)
+        
+        st.cache_data.clear() # Limpia la memoria para que aparezca en la tabla
+        return True
+    except Exception as e:
+        st.error(f"Fallo de sincronización: {e}")
+        return False
+
+# --- DENTRO DEL FORMULARIO DE ADMIN ---
+if es_admin:
+    with st.expander("➕ CREAR NUEVO CRÉDITO"):
+        with st.form("nuevo_credito_form"):
+            c_nom = st.text_input("Nombre del Cliente").upper()
+            c_mon = st.number_input("Capital a entregar", min_value=0)
+            c_cuo = st.number_input("Valor de la Cuota", min_value=0)
+            c_cob = st.selectbox("Asignar a Cobrador (ID)", cargar_datos(GID_USUARIOS)['ID'].tolist())
+            
+            if st.form_submit_button("🚀 REGISTRAR Y SINCRONIZAR"):
+                # Crear el DataFrame del nuevo préstamo
+                nuevo_p = pd.DataFrame([{
+                    "ID": datetime.now().strftime("%d%m%H%M"), # ID único basado en tiempo
+                    "Clientes": c_nom,
+                    "Saldo": c_mon,
+                    "Cuota": c_cuo,
+                    "Cobrador": c_cob,
+                    "Estado": "Activo"
+                }])
+                
+                if guardar_nuevo_prestamo(nuevo_p):
+                    st.success(f"✅ ¡Sincronizado! {c_nom} ya está en Google Sheets.")
+                    st.balloons()
