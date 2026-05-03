@@ -1,136 +1,130 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
+import os
 
-# --- 1. CONFIGURACIÓN Y ESTILOS ---
-st.set_page_config(page_title="Control de Cartera Pro", page_icon="🏦", layout="centered")
+# --- 1. CONFIGURACIÓN ---
+st.set_page_config(page_title="PrestApp Control Total", page_icon="🔐")
 
-st.markdown("""
-    <style>
-    .stApp { background-color: #F2F2F7; }
-    .card-admin { background-color: #1c1c1e; padding: 20px; border-radius: 15px; color: #32D74B; text-align: center; border: 2px solid #32D74B; margin-bottom: 20px; }
-    .card-cobrador { background-color: #007AFF; padding: 15px; border-radius: 15px; color: white; text-align: center; margin-bottom: 20px; }
-    .info-cuota { padding: 10px; border-radius: 10px; margin-bottom: 5px; font-size: 14px; border-left: 5px solid #007AFF; background-color: #f0f0f5; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- 2. GESTIÓN DE BASE DE DATOS FÍSICA (ARCHIVO CSV) ---
+# Esto evita que los cobradores se borren al reiniciar
+USUARIOS_FILE = "usuarios_registrados.csv"
 
-# --- 2. BASE DE DATOS (EN MEMORIA) ---
+def cargar_usuarios():
+    if os.path.exists(USUARIOS_FILE):
+        df = pd.read_csv(USUARIOS_FILE, index_col=0)
+        return df.to_dict('index')
+    else:
+        # Usuario maestro por defecto
+        return {"admin": {"nombre": "Dueño", "clave": "admin123", "rol": "admin"}}
+
+def guardar_usuario(id_u, nombre, clave, rol):
+    usuarios = cargar_usuarios()
+    usuarios[id_u] = {"nombre": nombre, "clave": str(clave), "rol": rol}
+    pd.DataFrame.from_dict(usuarios, orient='index').to_csv(USUARIOS_FILE)
+
+# Cargar usuarios al inicio
 if 'usuarios_db' not in st.session_state:
-    st.session_state.usuarios_db = {"admin": {"nombre": "Dueño", "clave": "admin123", "rol": "admin"}}
-if 'data' not in st.session_state:
-    st.session_state.data = pd.DataFrame(columns=['ID', 'Cliente', 'Saldo', 'Cuota', 'Cobrador', 'Estado'])
-if 'historial' not in st.session_state:
-    st.session_state.historial = pd.DataFrame(columns=['ID_P', 'Fecha', 'Monto', 'Quien_Cobro'])
+    st.session_state.usuarios_db = cargar_usuarios()
+
+# --- 3. ESTADO DE SESIÓN ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'user_id' not in st.session_state: st.session_state.user_id = None
+if 'data' not in st.session_state: st.session_state.data = pd.DataFrame(columns=['ID', 'Cliente', 'Saldo', 'Cobrador', 'Estado'])
 
-# --- 3. LÓGICA DE ACCESO ---
+# --- 4. PANTALLA DE LOGIN ---
 if not st.session_state.logged_in:
-    st.markdown("<h2 style='text-align: center;'>🔐 Ingreso al Sistema</h2>", unsafe_allow_html=True)
-    u = st.text_input("Usuario")
-    p = st.text_input("Contraseña", type="password")
-    if st.button("ENTRAR", use_container_width=True):
-        if u in st.session_state.usuarios_db and st.session_state.usuarios_db[u]['clave'] == p:
+    st.markdown("<h2 style='text-align: center;'>🔐 Acceso Sistema de Cobro</h2>", unsafe_allow_html=True)
+    
+    # IMPORTANTE: Trim para evitar espacios en blanco accidentales
+    u_input = st.text_input("Usuario ID").strip()
+    p_input = st.text_input("Contraseña", type="password").strip()
+    
+    if st.button("INGRESAR", use_container_width=True):
+        db = cargar_usuarios() # Recargar para asegurar nuevos registros
+        if u_input in db and str(db[u_input]['clave']) == p_input:
             st.session_state.logged_in = True
-            st.session_state.user_id = u
+            st.session_state.user_id = u_input
+            st.session_state.usuarios_db = db
             st.rerun()
         else:
-            st.error("Credenciales incorrectas")
+            st.error("❌ Credencial incorrecta. Verifica mayúsculas/minúsculas.")
     st.stop()
 
-# --- 4. DATOS DEL USUARIO ACTUAL ---
-user_actual = st.session_state.usuarios_db[st.session_state.user_id]
-es_admin = (user_actual['rol'] == "admin")
+# --- 5. INTERFAZ PROTEGIDA ---
+user_data = st.session_state.usuarios_db[st.session_state.user_id]
+es_admin = (user_data['rol'] == "admin")
 
-# --- 5. MENÚ LATERAL ---
 with st.sidebar:
-    st.title("🏦 Menú")
-    st.write(f"Usuario: **{user_actual['nombre']}**")
+    st.title("🏦 PrestApp")
+    st.write(f"Sesión: **{user_data['nombre']}**")
     if st.button("Cerrar Sesión"):
         st.session_state.logged_in = False
         st.rerun()
     
-    st.divider()
     if es_admin:
-        st.subheader("👥 Gestión de Personal")
-        id_nuevo = st.text_input("ID Login (ej: juan)")
-        nom_nuevo = st.text_input("Nombre Real")
-        cla_nuevo = st.text_input("Clave")
-        if st.button("Crear Cobrador"):
-            if id_nuevo and nom_nuevo and cla_nuevo:
-                st.session_state.usuarios_db[id_nuevo] = {"nombre": nom_nuevo, "clave": cla_nuevo, "rol": "cobrador"}
-                st.success(f"Creado: {id_nuevo}")
+        st.divider()
+        st.subheader("⚙️ Registrar Cobrador")
+        nuevo_id = st.text_input("ID de login (ej: carlos1)").strip()
+        nuevo_nom = st.text_input("Nombre del empleado")
+        nuevo_cla = st.text_input("Clave de acceso")
+        
+        if st.button("Guardar Cobrador"):
+            if nuevo_id and nuevo_cla:
+                guardar_usuario(nuevo_id, nuevo_nom, nuevo_cla, "cobrador")
+                st.success(f"Cobrador {nuevo_id} guardado correctamente.")
                 st.rerun()
 
-# --- 6. FUNCIONES (MODALES) ---
-@st.dialog("➕ Crear Nuevo Crédito")
-def modal_nuevo_prestamo():
-    st.write("### Solo el Administrador puede prestar")
-    c = st.text_input("Nombre del Cliente").upper()
-    m = st.number_input("Monto a entregar $", min_value=0.0)
-    # Lista de cobradores para asignarles el trabajo
-    lista_cobradores = [k for k, v in st.session_state.usuarios_db.items() if v['rol'] == 'cobrador']
-    cob_asig = st.selectbox("Asignar cobro a:", lista_cobradores)
-    
-    if st.button("DESEMBOLSAR"):
-        total = m * 1.20 # 20% de interés
-        id_p = datetime.now().strftime("%H%M%S")
-        nuevo = pd.DataFrame([{'ID': id_p, 'Cliente': c, 'Saldo': total, 'Cuota': total/20, 'Cobrador': cob_asig, 'Estado': 'Activo'}])
-        st.session_state.data = pd.concat([st.session_state.data, nuevo], ignore_index=True)
-        st.success("Crédito creado con éxito")
-        st.rerun()
+# --- 6. OPERACIONES CENTRALIZADAS ---
 
-@st.dialog("💰 Registrar Cobro")
-def modal_cobrar():
-    # El cobrador solo ve sus clientes, el admin ve todos
-    query = (st.session_state.data['Estado'] == 'Activo')
-    if not es_admin:
-        query = query & (st.session_state.data['Cobrador'] == st.session_state.user_id)
-    
-    mis_cli = st.session_state.data[query]
-    if mis_cli.empty:
-        st.warning("No hay clientes pendientes.")
-        return
-        
-    seleccion = st.selectbox("Cliente", mis_cli['Cliente'].unique())
-    idx = mis_cli[mis_cli['Cliente'] == seleccion].index[-1]
-    abono = st.number_input("Monto Recibido", value=float(mis_cli.at[idx, 'Cuota']))
-    
-    if st.button("GUARDAR ABONO"):
-        st.session_state.data.at[idx, 'Saldo'] -= abono
-        # Registrar en historial
-        hist = pd.DataFrame([{'ID_P': mis_cli.at[idx, 'ID'], 'Fecha': datetime.now().strftime("%d/%m"), 'Monto': abono, 'Quien_Cobro': user_actual['nombre']}])
-        st.session_state.historial = pd.concat([st.session_state.historial, hist], ignore_index=True)
-        
-        if st.session_state.data.at[idx, 'Saldo'] <= 0:
-            st.session_state.data.at[idx, 'Estado'] = 'Finalizado'
-        st.rerun()
-
-# --- 7. PANTALLA PRINCIPAL ---
 if es_admin:
-    st.markdown(f'<div class="card-admin">💼 PANEL DE DUEÑO<br>Suma en Calle: ${st.session_state.data[st.session_state.data["Estado"]=="Activo"]["Saldo"].sum():,.0f}</div>', unsafe_allow_html=True)
-    if st.button("➕ NUEVO CRÉDITO", use_container_width=True):
-        modal_nuevo_prestamo()
+    st.header("Panel de Administración")
+    # Solo el admin ve el botón de prestar
+    if st.button("➕ CREAR NUEVO PRÉSTAMO"):
+        @st.dialog("Nuevo Crédito")
+        def modal_p():
+            cliente = st.text_input("Nombre Cliente")
+            monto = st.number_input("Monto $", min_value=0.0)
+            # Lista de cobradores registrados
+            cobs = [k for k, v in cargar_usuarios().items() if v['rol'] == 'cobrador']
+            asig = st.selectbox("Asignar a Cobrador:", cobs)
+            if st.button("Confirmar Desembolso"):
+                id_p = datetime.now().strftime("%f")
+                n = pd.DataFrame([{'ID': id_p, 'Cliente': cliente, 'Saldo': monto*1.2, 'Cobrador': asig, 'Estado': 'Activo'}])
+                st.session_state.data = pd.concat([st.session_state.data, n], ignore_index=True)
+                st.rerun()
+        modal_p()
 else:
-    st.markdown(f'<div class="card-cobrador">🛵 RUTA DE COBRO: {user_actual["nombre"]}</div>', unsafe_allow_html=True)
+    st.header(f"Ruta de: {user_data['nombre']}")
+    # El cobrador NO tiene botón de préstamo, solo de cobro
 
-if st.button("💰 REGISTRAR COBRO", use_container_width=True):
-    modal_cobrar()
+if st.button("💰 REGISTRAR COBRO"):
+    @st.dialog("Cobrar")
+    def modal_c():
+        # Filtro estricto: solo sus clientes
+        query = (st.session_state.data['Estado'] == 'Activo')
+        if not es_admin:
+            query = query & (st.session_state.data['Cobrador'] == st.session_state.user_id)
+        
+        mis_c = st.session_state.data[query]
+        if mis_c.empty:
+            st.write("No tienes clientes asignados.")
+        else:
+            sel = st.selectbox("Cliente", mis_c['Cliente'])
+            abono = st.number_input("Monto", min_value=0.0)
+            if st.button("Guardar Pago"):
+                idx = mis_c[mis_c['Cliente'] == sel].index[-1]
+                st.session_state.data.at[idx, 'Saldo'] -= abono
+                if st.session_state.data.at[idx, 'Saldo'] <= 0:
+                    st.session_state.data.at[idx, 'Estado'] = 'Finalizado'
+                st.rerun()
+    modal_c()
 
+# --- 7. TABLA DE CARTERA ---
 st.divider()
-
-# --- 8. VISTA DE CARTERA ---
-st.subheader("📋 Clientes Activos")
-q_cartera = (st.session_state.data['Estado'] == 'Activo')
+st.subheader("Cartera Activa")
+vista_query = (st.session_state.data['Estado'] == 'Activo')
 if not es_admin:
-    q_cartera = q_cartera & (st.session_state.data['Cobrador'] == st.session_state.user_id)
+    vista_query = vista_query & (st.session_state.data['Cobrador'] == st.session_state.user_id)
 
-cartera = st.session_state.data[q_cartera]
-
-for _, r in cartera.iloc[::-1].iterrows():
-    with st.expander(f"👤 {r['Cliente']} | Debe: ${r['Saldo']:,.0f}"):
-        st.write(f"Cobrador responsable: **{r['Cobrador']}**")
-        pagos = st.session_state.historial[st.session_state.historial['ID_P'] == r['ID']]
-        if not pagos.empty:
-            for _, p in pagos.iterrows():
-                st.markdown(f'<div class="info-cuota">📅 {p["Fecha"]} | ${p["Monto"]:,.0f} | Cobró: {p["Quien_Cobro"]}</div>', unsafe_allow_html=True)
+st.dataframe(st.session_state.data[vista_query][['Cliente', 'Saldo', 'Cobrador']], use_container_width=True)
