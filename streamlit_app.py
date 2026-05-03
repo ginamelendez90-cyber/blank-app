@@ -2,74 +2,91 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Gestión de Préstamos", page_icon="💸", layout="wide")
+st.set_page_config(page_title="App Prestamista Pro", page_icon="📈", layout="wide")
 
-# Título y configuración
-st.title("🏦 Sistema de Control de Cobros")
+st.title("🏦 Control de Préstamos y Cobranza")
 
-# Inicialización de la base de datos en la sesión
 if 'data' not in st.session_state:
     st.session_state.data = pd.DataFrame(columns=[
-        'Cliente', 'Monto Inicial', 'Interés %', 'Total a Pagar', 'Pagado', 'Saldo Pendiente', 'Vencimiento'
+        'Cliente', 'Monto Inicial', 'Interés %', 'Total a Pagar', 
+        'Método', 'Cuota $', 'Pagado', 'Saldo Pendiente', 'Vencimiento'
     ])
 
-# --- SECCIÓN 1: REGISTRO DE PRÉSTAMO ---
-with st.expander("➕ Nuevo Préstamo"):
+# --- SECCIÓN 1: REGISTRO CON CÁLCULO DE CUOTAS ---
+with st.expander("➕ Registrar Nuevo Préstamo"):
     with st.form("registro"):
         col1, col2 = st.columns(2)
         with col1:
             cliente = st.text_input("Nombre del Cliente").upper()
-            monto = st.number_input("Monto Prestado ($)", min_value=0.0, step=10.0)
+            monto = st.number_input("Monto Prestado ($)", min_value=0.0, step=50.0)
+            tasa = st.number_input("Tasa de Interés (%)", min_value=0.0, value=20.0)
+            
         with col2:
-            tasa = st.number_input("Tasa de Interés (%)", min_value=0.0, value=20.0, step=1.0)
-            plazo = st.number_input("Días de plazo", min_value=1, value=30)
+            metodo = st.selectbox("Frecuencia de Pago", ["Diario", "Semanal"])
+            plazo_tiempo = st.number_input(f"¿Cuántos/as {metodo}s?", min_value=1, value=4)
         
-        if st.form_submit_button("Registrar Préstamo"):
+        if st.form_submit_button("Calcular y Guardar"):
             total_pagar = monto * (1 + (tasa / 100))
-            vencimiento = (datetime.now() + timedelta(days=plazo)).strftime('%Y-%m-%d')
+            # Cálculo de la cuota según el método
+            cuota = total_pagar / plazo_tiempo
+            
+            # Cálculo de fecha de vencimiento
+            dias_totales = plazo_tiempo if metodo == "Diario" else plazo_tiempo * 7
+            vencimiento = (datetime.now() + timedelta(days=dias_totales)).strftime('%Y-%m-%d')
             
             nuevo = pd.DataFrame([{
                 'Cliente': cliente,
                 'Monto Inicial': monto,
                 'Interés %': tasa,
                 'Total a Pagar': total_pagar,
+                'Método': metodo,
+                'Cuota $': round(cuota, 2),
                 'Pagado': 0.0,
                 'Saldo Pendiente': total_pagar,
                 'Vencimiento': vencimiento
             }])
             
             st.session_state.data = pd.concat([st.session_state.data, nuevo], ignore_index=True)
-            st.success(f"✅ Préstamo creado para {cliente}")
+            st.success(f"✅ ¡Guardado! El cliente pagará {plazo_tiempo} cuotas de ${round(cuota, 2)} ({metodo})")
 
-# --- SECCIÓN 2: REGISTRO DE PAGOS (ABONOS) ---
-with st.expander("💰 Registrar Abono / Pago"):
+# --- SECCIÓN 2: COBRO RÁPIDO ---
+with st.expander("💸 Registrar Cobro de Cuota"):
     if not st.session_state.data.empty:
-        cliente_pago = st.selectbox("Seleccionar Cliente", st.session_state.data['Cliente'].unique())
-        monto_abono = st.number_input("Monto del Abono ($)", min_value=0.0, step=5.0)
+        c_pago = st.selectbox("Cliente que paga:", st.session_state.data['Cliente'].unique())
+        # Sugerir el monto de la cuota automáticamente
+        idx_c = st.session_state.data[st.session_state.data['Cliente'] == c_pago].index[0]
+        cuota_sugerida = st.session_state.data.at[idx_c, 'Cuota $']
         
-        if st.button("Confirmar Pago"):
-            # Buscar el índice del cliente y actualizar
-            idx = st.session_state.data[st.session_state.data['Cliente'] == cliente_pago].index[0]
-            st.session_state.data.at[idx, 'Pagado'] += monto_abono
-            st.session_state.data.at[idx, 'Saldo Pendiente'] -= monto_abono
-            st.success(f"Abono de ${monto_abono} registrado para {cliente_pago}")
+        monto_recibido = st.number_input("Monto recibido ($)", value=float(cuota_sugerida))
+        
+        if st.button("Confirmar Cobro"):
+            st.session_state.data.at[idx_c, 'Pagado'] += monto_recibido
+            st.session_state.data.at[idx_c, 'Saldo Pendiente'] -= monto_recibido
+            st.success(f"Cobro de ${monto_recibido} registrado para {c_pago}")
     else:
-        st.info("No hay clientes registrados aún.")
+        st.info("No hay préstamos activos.")
 
-# --- SECCIÓN 3: RESUMEN Y CARTERA ---
+# --- SECCIÓN 3: LISTA DE COBRANZA ---
 st.divider()
-st.subheader("📊 Resumen de Cartera")
+st.subheader("📝 Hoja de Ruta de Cobros")
 
 if not st.session_state.data.empty:
-    # Indicadores rápidos (Métricas)
-    total_en_calle = st.session_state.data['Saldo Pendiente'].sum()
-    total_ganancia_esperada = (st.session_state.data['Total a Pagar'] - st.session_state.data['Monto Inicial']).sum()
-    
-    m1, m2 = st.columns(2)
-    m1.metric("Saldo Total Pendiente", f"${total_en_calle:,.2f}")
-    m2.metric("Ganancia Estimada", f"${total_ganancia_esperada:,.2f}", delta_color="normal")
+    # Filtro rápido para ver quién debe hoy
+    busqueda = st.text_input("🔍 Buscar cliente por nombre")
+    df_mostrar = st.session_state.data
+    if busqueda:
+        df_mostrar = df_mostrar[df_mostrar['Cliente'].str.contains(busqueda.upper())]
 
-    # Tabla detallada
-    st.dataframe(st.session_state.data.style.highlight_max(axis=0, subset=['Saldo Pendiente'], color='#FFCCCC'), use_container_width=True)
-else:
-    st.write("La cartera está vacía.")
+    # Resumen visual
+    st.dataframe(df_mostrar.style.format({
+        'Monto Inicial': '${:,.2f}',
+        'Total a Pagar': '${:,.2f}',
+        'Cuota $': '${:,.2f}',
+        'Pagado': '${:,.2f}',
+        'Saldo Pendiente': '${:,.2f}'
+    }), use_container_width=True)
+    
+    # Resumen de caja
+    c1, c2 = st.columns(2)
+    c1.metric("Recaudado Total", f"${st.session_state.data['Pagado'].sum():,.2f}")
+    c2.metric("Pendiente por Cobrar", f"${st.session_state.data['Saldo Pendiente'].sum():,.2f}")
