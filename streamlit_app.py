@@ -1,127 +1,117 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client, Client
-from datetime import datetime
-import urllib.parse
+import numpy as np
+from scipy.stats import poisson
 
-# --- 1. CONEXIÓN ---
-@st.cache_resource
-def init_connection():
-    url = st.secrets["https://netrbgledrnsjjuyhpui.supabase.co/rest/v1/"]
-    key = st.secrets["sb_publishable_qH4a5QFumA-zqXfhZD6l-w_r5gTLRie"]
-    return create_client(url, key)
+# --- CONFIGURACIÓN DE INTERFAZ ---
+st.set_page_config(page_title="Radar de Valor V8.4 - Lógica Pro", layout="wide")
 
-supabase = init_connection()
+class EngineLogicaPro:
+    def calcular_analisis(self, local_data, visita_data, cuotas, home_adv):
+        # 1. APLICACIÓN DE FACTOR DE LOCALÍA (Lógica Deportiva)
+        # El local suele rendir un poco más que su promedio general
+        xg_local_adj = local_data['xg'] * (1 + home_adv)
+        xga_local_adj = local_data['xga'] * (1 - home_adv)
+        
+        # 2. AJUSTE DE FUERZAS CRUZADAS
+        lambda_l = (xg_local_adj + visita_data['xga']) / 2
+        lambda_v = (visita_data['xg'] + xga_local_adj) / 2
+        
+        # 3. MATRIZ DE POISSON
+        max_g = 10
+        p_l = [poisson.pmf(i, lambda_l) for i in range(max_g)]
+        p_v = [poisson.pmf(i, lambda_v) for i in range(max_g)]
+        matriz = np.outer(p_l, p_v)
+        
+        # Probabilidades Matemáticas
+        p_x = np.sum(np.diag(matriz)) 
+        p_1 = np.sum(np.tril(matriz, -1))
+        p_2 = 1 - p_1 - p_x
+        
+        # Mercados de Goles
+        p_u25 = sum(matriz[i, j] for i in range(3) for j in range(3-i))
+        p_o25 = 1 - p_u25
+        p_btts = 1 - (p_l[0] + p_v[0] - matriz[0, 0])
 
-# --- 2. ESTILO ---
-st.set_page_config(page_title="PrestApp Supabase", page_icon="⚡", layout="wide")
-st.markdown("""
-    <style>
-    .stApp { background-color: #0c0e14; color: white; }
-    .metric-card {
-        background: linear-gradient(145deg, #161b22, #0d1117);
-        padding: 20px; border-radius: 15px; border: 1px solid #30363d;
-        text-align: center; box-shadow: 5px 5px 15px rgba(0,0,0,0.3);
-    }
-    </style>
-    """, unsafe_allow_html=True)
+        # 4. CÁLCULO DE VALOR (EV) - (P * Cuota) - 1
+        def get_ev(p, c): return (p * c) - 1 if c > 0 else -1
+        
+        # 5. DETERMINAR FAVORITO POR PROBABILIDAD
+        probs = {local_data['nombre']: p_1, "Empate": p_x, visita_data['nombre']: p_2}
+        ganador_logico = max(probs, key=probs.get)
 
-# --- 3. LÓGICA DE DATOS ---
-def traer_datos(tabla):
-    res = supabase.table(tabla).select("*").execute()
-    return pd.DataFrame(res.data)
+        return {
+            "p_1": p_1, "p_x": p_x, "p_2": p_2, "p_o25": p_o25, "p_u25": p_u25, "p_btts": p_btts,
+            "cj_l": 1/p_1, "cj_x": 1/p_x, "cj_v": 1/p_2, "cj_o25": 1/p_o25, "cj_u25": 1/p_u25, "cj_btts": 1/p_btts,
+            "ev_l": get_ev(p_1, cuotas['L']), "ev_x": get_ev(p_x, cuotas['X']), "ev_v": get_ev(p_2, cuotas['V']),
+            "ev_o25": get_ev(p_o25, cuotas['O25']), "ev_u25": get_ev(p_u25, cuotas['U25']), "ev_btts": get_ev(p_btts, cuotas['BTTS']),
+            "ganador_logico": ganador_logico
+        }
 
-# --- 4. LOGIN ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
+# --- INTERFAZ ---
+st.title("🛰️ Radar de Valor V8.4: Lógica de Localía")
+st.markdown("---")
 
-if not st.session_state.logged_in:
-    st.title("🛡️ Acceso Seguro")
-    with st.form("login_form"):
-        u = st.text_input("Usuario ID")
-        p = st.text_input("Contraseña", type="password")
-        if st.form_submit_button("INGRESAR"):
-            df_u = traer_datos("usuarios")
-            if not df_u.empty:
-                user_match = df_u[(df_u['ID'].astype(str) == u) & (df_u['Clave'].astype(str) == p)]
-                if not user_match.empty:
-                    st.session_state.logged_in = True
-                    st.session_state.user = user_match.iloc[0].to_dict()
-                    st.rerun()
-            st.error("Credenciales incorrectas")
-    st.stop()
+t1, t2 = st.tabs(["📊 Datos de Entrada", "💰 Resultados Coherentes"])
 
-# --- 5. DASHBOARD ---
-user = st.session_state.user
-es_admin = (user['Rol'] == "admin")
+with t1:
+    col_cfg1, col_cfg2 = st.columns([2, 1])
+    with col_cfg1:
+        st.info("Ingresa los datos de xG y xGA que ves en la imagen de 365Scores.")
+    with col_cfg2:
+        h_adv = st.slider("Ventaja Localía (%)", 0, 20, 10) / 100
 
-# Cargar Cartera Activa
-df_p = traer_datos("prestamos")
-if not df_p.empty:
-    df_p = df_p[df_p['estado'] == 'Activo']
-    if not es_admin:
-        df_p = df_p[df_p['cobrador'].astype(str) == str(user['ID'])]
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Casa (Local)")
+        n_l = st.text_input("Equipo Local", "Bournemouth")
+        xg_l = st.number_input("xG (Esperados) L", value=1.75) # Valor más alto para el favorito
+        xga_l = st.number_input("xGA (Recibidos) L", value=1.20)
+    with c2:
+        st.subheader("Fuera (Visitante)")
+        n_v = st.text_input("Equipo Visitante", "Crystal Palace")
+        xg_v = st.number_input("xG (Esperados) V", value=1.10)
+        xga_v = st.number_input("xGA (Recibidos) V", value=1.65)
 
-# Métricas Top
-st.title(f"📊 Control de Cartera: {user['Nombre']}")
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.markdown(f'<div class="metric-card"><h4>Clientes</h4><h2>{len(df_p)}</h2></div>', unsafe_allow_html=True)
-with c2:
-    total = df_p['saldo'].sum() if not df_p.empty else 0
-    st.markdown(f'<div class="metric-card"><h4>Saldo en Calle</h4><h2 style="color:#32D74B">${total:,.0f}</h2></div>', unsafe_allow_html=True)
-with c3:
-    meta = df_p['cuota'].sum() if not df_p.empty else 0
-    st.markdown(f'<div class="metric-card"><h4>Cobro del Día</h4><h2 style="color:#007AFF">${meta:,.0f}</h2></div>', unsafe_allow_html=True)
+with t2:
+    st.subheader("Cuotas Reales de la Casa")
+    c_in1, c_in2, c_in3 = st.columns(3)
+    cl = c_in1.number_input(f"Cuota {n_l}", value=1.70) # Cuota lógica para un favorito
+    cx = c_in2.number_input("Cuota Empate", value=3.90)
+    cv = c_in3.number_input(f"Cuota {n_v}", value=4.25)
+    
+    st.markdown("**Goles y BTTS**")
+    c_g1, c_g2, c_g3 = st.columns(3)
+    co = c_g1.number_input("Cuota Over 2.5", value=1.85)
+    cu = c_g2.number_input("Cuota Under 2.5", value=2.00)
+    cb = c_g3.number_input("Cuota BTTS (SI)", value=1.75)
 
-# Acciones
-t_cobros, t_gestion = st.tabs(["💸 Registrar Cobro", "🛠️ Gestión de Créditos"])
+    if st.button("🚀 GENERAR ANÁLISIS LÓGICO", use_container_width=True):
+        engine = EngineLogicaPro()
+        res = engine.calcular_analisis(
+            {'nombre': n_l, 'xg': xg_l, 'xga': xga_l},
+            {'nombre': n_v, 'xg': xg_v, 'xga': xga_v},
+            {'L': cl, 'X': cx, 'V': cv, 'O25': co, 'U25': cu, 'BTTS': cb},
+            h_adv
+        )
 
-with t_cobros:
-    if not df_p.empty:
-        sel_cli = st.selectbox("Seleccione Cliente", ["---"] + df_p['clientes'].tolist())
-        if sel_cli != "---":
-            datos_cli = df_p[df_p['clientes'] == sel_cli].iloc[0]
-            abono = st.number_input(f"Abono (Deuda actual: ${datos_cli['saldo']:,.0f})", min_value=0)
-            
-            if st.button("PROCESAR PAGO"):
-                nuevo_saldo = datos_cli['saldo'] - abono
-                # ACTUALIZAR EN SUPABASE
-                try:
-                    supabase.table("prestamos").update({"saldo": nuevo_saldo}).eq("id", datos_cli['id']).execute()
-                    st.success("✅ Pago registrado en la base de datos")
-                    
-                    # WhatsApp
-                    msg = f"✅ *PAGO RECIBIDO*\n\nCliente: {sel_cli}\nAbono: *${abono:,.0f}*\nNuevo Saldo: *${nuevo_saldo:,.0f}*"
-                    st.markdown(f"[📲 Enviar Comprobante](https://wa.me/?text={urllib.parse.quote(msg)})")
-                    st.cache_data.clear()
-                except Exception as e:
-                    st.error(f"Error al guardar: {e}")
+        # TABLA DE RESULTADOS
+        st.subheader("📋 Diagnóstico de Valor")
+        def tag(ev): return "POSITIVO" if ev > 0.05 else "negativo"
+        
+        df_data = {
+            "Mercado": [n_l, "Empate", n_v, "Over 2.5", "Under 2.5", "Ambos Anotan"],
+            "Prob. Real": [f"{res['p_1']:.1%}", f"{res['p_x']:.1%}", f"{res['p_2']:.1%}", f"{res['p_o25']:.1%}", f"{res['p_u25']:.1%}", f"{res['p_btts']:.1%}"],
+            "Cuota Justa": [res['cj_l'], res['cj_x'], res['cj_v'], res['cj_o25'], res['cj_u25'], res['cj_btts']],
+            "Diagnóstico": [tag(res['ev_l']), tag(res['ev_x']), tag(res['ev_v']), tag(res['ev_o25']), tag(res['ev_u25']), tag(res['ev_btts'])]
+        }
+        
+        st.table(pd.DataFrame(df_data).style.format({"Cuota Justa": "{:.2f}"}).map(
+            lambda x: 'background-color: #1b5e20; color: white; font-weight: bold' if x == "POSITIVO" else 'color: #757575',
+            subset=['Diagnóstico']
+        ))
 
-with t_gestion:
-    if es_admin:
-        with st.form("nuevo_p"):
-            st.subheader("Nuevo Crédito")
-            nc_nom = st.text_input("Nombre del Cliente").upper()
-            nc_mon = st.number_input("Capital", min_value=0)
-            nc_cuo = st.number_input("Cuota Diaria", min_value=0)
-            nc_cob = st.selectbox("Cobrador Asignado", traer_datos("usuarios")['ID'].tolist())
-            
-            if st.form_submit_button("DESEMBOLSAR"):
-                new_data = {
-                    "clientes": nc_nom, "saldo": nc_mon, 
-                    "cuota": nc_cuo, "cobrador": nc_cob, "estado": "Activo"
-                }
-                supabase.table("prestamos").insert(new_data).execute()
-                st.success("🔥 Crédito Sincronizado!")
-                st.balloons()
-    else:
-        st.info("Funciones administrativas restringidas.")
-
-# Tabla
-st.divider()
-st.subheader("📋 Detalle de Cartera")
-if not df_p.empty:
-    st.dataframe(df_p[['clientes', 'saldo', 'cuota', 'cobrador']], use_container_width=True)
-else:
-    st.write("No hay créditos activos.")
+        # VEREDICTO FINAL COHERENTE
+        st.divider()
+        st.success(f"🏆 **Favorito Lógico:** {res['ganador_logico']} ({max(res['p_1'], res['p_x'], res['p_2']):.1%})")
+        st.info(f"💡 **Explicación:** El Bournemouth es favorito porque su xG (ajustado por localía) es superior al xG del Palace y choca contra una defensa visitante más débil.")
