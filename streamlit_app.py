@@ -1,139 +1,107 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
 import re
-from scipy.stats import poisson
 from datetime import datetime
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Radar V9.5 - Gestión de Datos", layout="wide")
+st.set_page_config(page_title="Multi-Sport Value Predictor", page_icon="📈", layout="centered")
 
-# Inicializar historial (esto NO se borra con el botón de la sidebar)
+# --- INICIALIZACIÓN DE ESTADOS ---
 if 'historial' not in st.session_state:
-    st.session_state.historial = []
+    st.session_state['historial'] = []
 
-# Función para extraer xG y Cuotas
-def extraer_todos_los_datos(texto):
-    numeros = re.findall(r"\d+\.\d+|\d+", texto)
-    return [float(n) for n in numeros]
+# --- FUNCIONES DE LIMPIEZA ---
+def limpiar_tenis(): st.session_state["texto_tenis"] = ""
+def limpiar_futbol(): st.session_state["texto_futbol"] = ""
 
-# FUNCIÓN DE LIMPIEZA ESPECÍFICA (Solo entradas, no historial)
-def limpiar_entradas():
-    claves_entrada = ['xg_l', 'xg_v', 'c_l', 'c_x', 'c_v', 'c_o', 'c_u', 'c_b', 'raw_input']
-    for clave in claves_entrada:
-        if clave in st.session_state:
-            st.session_state[clave] = 0.0 if clave != 'raw_input' else ""
-    st.toast("Formulario listo para nuevo partido")
-
-class EngineMonteCarlo:
-    def simular_partido(self, l_xg, v_xg, h_adv, sims=10000):
-        l_lamb = l_xg * (1 + h_adv)
-        v_lamb = v_xg 
-        goles_l = np.random.poisson(l_lamb, sims)
-        goles_v = np.random.poisson(v_lamb, sims)
-        resultados = pd.DataFrame({'L': goles_l, 'V': goles_v})
-        
-        # Probabilidades
-        p_1 = np.mean(resultados['L'] > resultados['V'])
-        p_x = np.mean(resultados['L'] == resultados['V'])
-        p_2 = np.mean(resultados['L'] < resultados['V'])
-        p_o25 = np.mean((resultados['L'] + resultados['V']) > 2.5)
-        p_btts = np.mean((resultados['L'] > 0) & (resultados['V'] > 0))
-        marcador_top = resultados.groupby(['L', 'V']).size().idxmax()
-        
-        return {
-            "p_1": p_1, "p_x": p_x, "p_2": p_2,
-            "p_o25": p_o25, "p_btts": p_btts,
-            "top_score": f"{marcador_top[0]} - {marcador_top[1]}"
-        }
+# --- LÓGICA DE PROCESAMIENTO ---
+def procesar_datos(texto, deporte):
+    bloques = re.split(r'ÚLTIMOS PARTIDOS:', texto)
+    resumen = []
+    for bloque in bloques:
+        if not bloque.strip(): continue
+        lineas = [l.strip() for l in bloque.strip().split('\n') if l.strip()]
+        if not lineas: continue
+        nombre = lineas[0]
+        matches = re.findall(r'(\d)\s+(\d)\s+([GEP])', bloque)
+        if matches:
+            victorias = sum(1 for m in matches if m[2] == 'G')
+            goles_partido = [int(m[0]) + int(m[1]) for m in matches]
+            
+            if deporte == "Tenis":
+                valor_metrica = sum(26.5 if (int(m[0]) + int(m[1])) >= 3 else 18.5 for m in matches) / len(matches)
+                prob_over = 0 # No aplica para fútbol
+            else:
+                # Fútbol: Promedio de goles y % de partidos con Over 1.5
+                valor_metrica = sum(goles_partido) / len(matches)
+                prob_over = sum(1 for g in goles_partido if g >= 2) / len(matches)
+                
+            resumen.append({
+                "nombre": nombre,
+                "win_rate": victorias / len(matches),
+                "metrica": valor_metrica,
+                "prob_over_15": prob_over,
+                "racha": f"{victorias}-{sum(1 for m in matches if m[2] == 'E')}-{sum(1 for m in matches if m[2] == 'P')}" if deporte == "Futbol" else f"{victorias}-{len(matches)-victorias}"
+            })
+    return resumen
 
 # --- INTERFAZ ---
-st.title("🛰️ Radar de Valor V9.5")
+tab1, tab2, tab3 = st.tabs(["🎾 Tenis", "⚽ Fútbol", "📜 Historial"])
 
-with st.sidebar:
-    st.header("📋 Importación")
-    raw_data = st.text_area("Pega datos de 365Scores:", height=150, key="raw_input")
+with tab1:
+    st.header("Análisis de Tenis")
+    data_tenis = st.text_area("Datos de Tenis:", height=150, key="texto_tenis")
+    if st.button("🚀 ANALIZAR TENIS"):
+        stats = procesar_datos(data_tenis, "Tenis")
+        if len(stats) >= 2:
+            j1, j2 = stats[0], stats[1]
+            ganador = j1 if j1['win_rate'] > j2['win_rate'] else j2
+            st.success(f"**Favorito:** {ganador['nombre']}")
+            st.session_state['historial'].insert(0, {"msg": f"Tenis: {j1['nombre']} vs {j2['nombre']}"})
+
+with tab2:
+    st.header("Análisis de Fútbol + Cuotas")
+    data_futbol = st.text_area("Datos de Fútbol:", height=150, key="texto_futbol")
     
-    col_sid1, col_sid2 = st.columns(2)
-    
-    if col_sid1.button("🪄 Rellenar"):
-        val = extraer_todos_los_datos(raw_data)
-        if len(val) >= 2: st.session_state['xg_l'] = val[0]; st.session_state['xg_v'] = val[1]
-        if len(val) >= 5: st.session_state['c_l'] = val[2]; st.session_state['c_x'] = val[3]; st.session_state['c_v'] = val[4]
-        if len(val) >= 8: st.session_state['c_o'] = val[5]; st.session_state['c_u'] = val[6]; st.session_state['c_b'] = val[7]
-        st.rerun()
+    col_cuota1, col_cuota2 = st.columns(2)
+    with col_cuota1:
+        cuota_local = st.number_input("Cuota Local (Casa)", min_value=1.01, value=2.0, step=0.1)
+    with col_cuota2:
+        cuota_over15 = st.number_input("Cuota Over 1.5 (Casa)", min_value=1.01, value=1.5, step=0.1)
 
-    # Este botón solo limpia los cuadros de texto de arriba
-    if col_sid2.button("🗑️ Limpiar Campos", on_click=limpiar_entradas):
-        st.rerun()
-
-t1, t2, t3 = st.tabs(["📥 Datos", "🧪 Simulación Monte Carlo", "📂 Historial Acumulado"])
-
-with t1:
     c1, c2 = st.columns(2)
     with c1:
-        n_l = st.text_input("Local", "Equipo Local")
-        xg_l = st.number_input("xG Local", value=st.session_state.get('xg_l', 0.0), format="%.2f")
-        c_l = st.number_input("Cuota 1", value=st.session_state.get('c_l', 0.0), format="%.2f")
+        if st.button("🚀 CALCULAR VALOR"):
+            stats = procesar_datos(data_futbol, "Futbol")
+            if len(stats) >= 2:
+                e1, e2 = stats[0], stats[1]
+                
+                # Cálculo de Probabilidades Reales
+                prob_ganador_real = ((e1['win_rate'] + (1 - e2['win_rate'])) / 2) * 100
+                prob_over15_real = ((e1['prob_over_15'] + e2['prob_over_15']) / 2) * 100
+                
+                # Verificación de Valor (Probabilidad Real > 1/Cuota)
+                valor_ganador = prob_ganador_real > (1/cuota_local * 100)
+                valor_over = prob_over15_real > (1/cuota_over15 * 100)
+
+                st.subheader("🎯 Veredicto de Fútbol")
+                
+                # Mostrar Gana Local
+                st.write(f"**Gana {e1['nombre']}:** {round(prob_ganador_real, 1)}% de probabilidad.")
+                if valor_ganador: st.success("✅ ¡HAY VALOR EN EL LOCAL!")
+                else: st.error("❌ Cuota muy baja para el riesgo.")
+
+                st.markdown("---")
+                
+                # Mostrar Over 1.5
+                st.write(f"**Probabilidad Over 1.5:** {round(prob_over15_real, 1)}%")
+                if valor_over: st.success("✅ ¡HAY VALOR EN EL OVER 1.5!")
+                else: st.warning("⚠️ Probabilidad ajustada a la cuota.")
+
+                st.session_state['historial'].insert(0, {"msg": f"Futbol: {e1['nombre']} vs {e2['nombre']} | Over 1.5: {round(prob_over15_real,1)}%"})
+
     with c2:
-        n_v = st.text_input("Visitante", "Equipo Visitante")
-        xg_v = st.number_input("xG Visitante", value=st.session_state.get('xg_v', 0.0), format="%.2f")
-        c_v = st.number_input("Cuota 2", value=st.session_state.get('c_v', 0.0), format="%.2f")
-    
-    st.divider()
-    col_cuotas = st.columns(4)
-    cx = col_cuotas[0].number_input("Cuota X", value=st.session_state.get('c_x', 0.0))
-    co = col_cuotas[1].number_input("Cuota O2.5", value=st.session_state.get('c_o', 0.0))
-    cu = col_cuotas[2].number_input("Cuota U2.5", value=st.session_state.get('c_u', 0.0))
-    cb = col_cuotas[3].number_input("Cuota BTTS", value=st.session_state.get('c_b', 0.0))
+        st.button("🗑️ BORRAR FÚTBOL", on_click=limpiar_futbol)
 
-with t2:
-    if xg_l > 0 or xg_v > 0:
-        if st.button("🎲 EJECUTAR ANÁLISIS", use_container_width=True):
-            engine = EngineMonteCarlo()
-            res = engine.simular_partido(xg_l, xg_v, 0.10)
-            
-            st.metric("Marcador Probable (Moda)", res['top_score'])
-            
-            mercados = [
-                (f"Victoria {n_l}", res['p_1'], c_l), ("Empate", res['p_x'], cx),
-                (f"Victoria {n_v}", res['p_2'], c_v), ("Over 2.5", res['p_o25'], co),
-                ("Under 2.5", 1-res['p_o25'], cu), ("Ambos Anotan", res['p_btts'], cb)
-            ]
-            
-            filas, opciones = [], []
-            for nombre, prob, cuota in mercados:
-                ev = (prob * cuota) - 1 if cuota > 0 else -1
-                filas.append({
-                    "Mercado": nombre, "Prob (%)": f"{prob:.1%}", 
-                    "Cuota Justa": round(1/prob, 2) if prob > 0 else 0,
-                    "EV": f"{ev*100:.1f}%",
-                    "Estado": "POSITIVO" if ev > 0 else "negativo"
-                })
-                opciones.append(f"{nombre} (@{cuota})")
-
-            st.table(pd.DataFrame(filas).style.map(
-                lambda x: 'background-color: #004d40; color: white' if x == "POSITIVO" else 'color: #757575',
-                subset=['Estado']
-            ))
-
-            st.divider()
-            sel1, sel2 = st.columns(2)
-            j1 = sel1.selectbox("Jugada A:", ["Ninguna"] + opciones)
-            j2 = sel2.selectbox("Jugada B:", ["Ninguna"] + opciones)
-            
-            if st.button("💾 CONFIRMAR Y GUARDAR"):
-                st.session_state.historial.append({
-                    "Fecha": datetime.now().strftime("%d/%m %H:%M"),
-                    "Partido": f"{n_l} vs {n_v}", "Sim": res['top_score'], "J1": j1, "J2": j2
-                })
-                st.toast("Guardado en Historial")
-    else:
-        st.warning("Pega o ingresa datos de xG para activar la simulación.")
-
-with t3:
-    if st.session_state.historial:
-        st.dataframe(pd.DataFrame(st.session_state.historial), use_container_width=True)
-        if st.button("🗑️ Vaciar Todo el Historial"):
-            st.session_state.historial = []
-            st.rerun()
+with tab3:
+    st.header("Historial")
+    for h in st.session_state['historial']:
+        st.write(h['msg'])
