@@ -70,21 +70,27 @@ with tab1:
             res = f"Favorito: {ganador['nombre']} | Juegos Est.: {round(j1['metrica_tenis'],1)}"
             st.success(res)
             st.session_state['historial'].insert(0, f"🎾 {j1['nombre']} vs {j2['nombre']} -> {res}")
+    st.button("🗑️ BORRAR", on_click=limpiar_tenis, key="btn_clear_t")
 
 with tab2:
     st.header("Fútbol: Análisis de Valor")
     data_f = st.text_area("1. Datos 365Scores:", height=150, key="texto_futbol")
-    contexto_f = st.text_area("2. Contexto:", height=80)
+    contexto_f = st.text_area("2. Contexto:", height=80, key="ctx_f")
     
-    st.subheader("💰 Cuotas")
+    st.subheader("💰 Cuotas (Sin límites)")
     c1, c2, c3 = st.columns(3)
     with c1:
-        cl, cv = st.number_input("Cuota Local", 2.0), st.number_input("Cuota Visita", 3.0)
+        # Eliminados los límites de min/max para total libertad
+        cl = st.number_input("Cuota Local", value=2.0, format="%.2f")
+        cv = st.number_input("Cuota Visita", value=3.0, format="%.2f")
     with c2:
-        co15, cu15 = st.number_input("Cuota O1.5", 1.3), st.number_input("Cuota U1.5", 3.5)
+        co15 = st.number_input("Cuota O1.5", value=1.3, format="%.2f")
+        cu15 = st.number_input("Cuota U1.5", value=3.5, format="%.2f")
     with c3:
-        co25, cu25 = st.number_input("Cuota O2.5", 2.0), st.number_input("Cuota U2.5", 1.8)
-    cbtts = st.number_input("Cuota BTTS", 1.9)
+        co25 = st.number_input("Cuota O2.5", value=2.0, format="%.2f")
+        cu25 = st.number_input("Cuota U2.5", value=1.8, format="%.2f")
+    
+    cbtts = st.number_input("Cuota BTTS", value=1.9, format="%.2f")
 
     if st.button("🔍 ANALIZAR VALOR TOTAL", use_container_width=True, type="primary"):
         stats = procesar_datos(data_f, "Futbol")
@@ -99,25 +105,5 @@ with tab2:
             res_partido = f"⚽ {e1['nombre']} vs {e2['nombre']}\n"
             
             def check_val(label, p_r, cuota):
-                diff = p_r - (1/cuota)*100
-                status = "✅ VALOR" if diff > 5 else "❌ RIESGO" if diff < -5 else "⚠️ JUSTO"
-                st.write(f"**{label}**: {status} ({round(p_r,1)}%)")
-                return f"- {label}: {status} ({round(p_r,1)}%)"
-
-            l1 = check_val(f"Gana {e1['nombre']}", p_l, cl)
-            l2 = check_val("Over 1.5", p_o15, co15)
-            l3 = check_val("Under 2.5", (100-p_o25), cu25)
-            l4 = check_val("BTTS", p_btts, cbtts)
-            
-            # Guardar reporte detallado en historial
-            reporte = f"{res_partido}{l1}\n{l2}\n{l3}\n{l4}"
-            st.session_state['historial'].insert(0, reporte)
-    st.button("🗑️ BORRAR", on_click=limpiar_futbol)
-
-with tab3:
-    st.header("Historial Detallado")
-    if st.session_state['historial']:
-        txt_h = "\n\n---\n\n".join(st.session_state['historial'])
-        st.text_area("Análisis Guardados:", value=txt_h, height=300)
-        mail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to=williamvg120@gmail.com&su=Reporte_Apuestas&body={urllib.parse.quote(txt_h)}"
-        st.markdown(f'<a href="{mail_url}" target="_blank" style="text-decoration:none;"><div style="background-color:#ff4b4b;color:white;padding:12px;text-align:center;border-radius:8px;font-weight:bold;">📩 ENVIAR REPORTE COMPLETO</div></a>', unsafe_allow_html=True)
+                # Protección básica contra división por cero si la cuota es 0
+                cu
