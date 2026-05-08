@@ -18,16 +18,22 @@ if 'texto_futbol' not in st.session_state:
 def limpiar_tenis(): st.session_state["texto_tenis"] = ""
 def limpiar_futbol(): st.session_state["texto_futbol"] = ""
 
-# --- LÓGICA DE PROCESAMIENTO ---
+# --- LÓGICA DE PROCESAMIENTO REFORZADA (A prueba de fallos) ---
 def procesar_datos(texto, deporte):
+    # Divide el texto ignorando mayúsculas/minúsculas
     bloques = re.split(r'ÚLTIMOS PARTIDOS:', texto, flags=re.IGNORECASE)
     resumen = []
+    
     for bloque in bloques:
         if not bloque.strip() or len(bloque) < 10: continue
+        
         lineas = [l.strip() for l in bloque.strip().split('\n') if l.strip()]
         if not lineas: continue
+        
         nombre = lineas[0]
-        matches = re.findall(r'(\d)\s*[-]*\s*(\d)\s*([GEP])', bloque, flags=re.IGNORECASE)
+        # Regex Ultra-Flexible: Detecta "2 1 G", "2-1 G", "2 - 1 G", "2:1 G"
+        matches = re.findall(r'(\d)\s*[:\-\s]*\s*(\d)\s*([GEP])', bloque, flags=re.IGNORECASE)
+        
         if matches:
             victorias = sum(1 for m in matches if m[2].upper() == 'G')
             goles_partido = [int(m[0]) + int(m[1]) for m in matches]
@@ -39,7 +45,8 @@ def procesar_datos(texto, deporte):
                 "p_o15": (sum(1 for g in goles_partido if g >= 2) / len(matches)) * 100,
                 "p_o25": (sum(1 for g in goles_partido if g >= 3) / len(matches)) * 100,
                 "p_btts": (btts_count / len(matches)) * 100,
-                "metrica_tenis": sum(26.5 if (int(m[0]) + int(m[1])) >= 3 else 18.5 for m in matches) / len(matches) if deporte == "Tenis" else 0
+                "metrica_tenis": sum(26.5 if (int(m[0]) + int(m[1])) >= 3 else 18.5 for m in matches) / len(matches) if deporte == "Tenis" else 0,
+                "cant": len(matches)
             })
     return resumen
 
@@ -70,17 +77,18 @@ with tab1:
             res = f"Favorito: {ganador['nombre']} | Juegos Est.: {round(j1['metrica_tenis'],1)}"
             st.success(res)
             st.session_state['historial'].insert(0, f"🎾 {j1['nombre']} vs {j2['nombre']} -> {res}")
-    st.button("🗑️ BORRAR", on_click=limpiar_tenis, key="btn_clear_t")
+        else:
+            st.error("No se detectaron 2 jugadores. Revisa el texto pegado.")
+    st.button("🗑️ BORRAR", on_click=limpiar_tenis, key="b_c_t")
 
 with tab2:
-    st.header("Fútbol: Análisis de Valor")
+    st.header("Fútbol: Valor Total")
     data_f = st.text_area("1. Datos 365Scores:", height=150, key="texto_futbol")
-    contexto_f = st.text_area("2. Contexto:", height=80, key="ctx_f")
+    ctx_f = st.text_area("2. Contexto (Opcional):", height=80, key="contexto_f_input")
     
-    st.subheader("💰 Cuotas (Sin límites)")
+    st.subheader("💰 Cuotas")
     c1, c2, c3 = st.columns(3)
     with c1:
-        # Eliminados los límites de min/max para total libertad
         cl = st.number_input("Cuota Local", value=2.0, format="%.2f")
         cv = st.number_input("Cuota Visita", value=3.0, format="%.2f")
     with c2:
@@ -89,12 +97,12 @@ with tab2:
     with c3:
         co25 = st.number_input("Cuota O2.5", value=2.0, format="%.2f")
         cu25 = st.number_input("Cuota U2.5", value=1.8, format="%.2f")
-    
     cbtts = st.number_input("Cuota BTTS", value=1.9, format="%.2f")
 
-    if st.button("🔍 ANALIZAR VALOR TOTAL", use_container_width=True, type="primary"):
+    if st.button("🔍 ANALIZAR VALOR", use_container_width=True, type="primary"):
         stats = procesar_datos(data_f, "Futbol")
-        aj = analizar_contexto(contexto_f)
+        aj = analizar_contexto(ctx_f)
+        
         if len(stats) >= 2:
             e1, e2 = stats[0], stats[1]
             p_l = (e1['win_rate'] + (100 - e2['win_rate'])) / 2
@@ -102,8 +110,38 @@ with tab2:
             p_o25 = ((e1['p_o25'] + e2['p_o25']) / 2) + aj["goles"]
             p_btts = ((e1['p_btts'] + e2['p_btts']) / 2) + (aj["goles"]/2)
             
-            res_partido = f"⚽ {e1['nombre']} vs {e2['nombre']}\n"
+            st.subheader(f"🎯 Análisis: {e1['nombre']} vs {e2['nombre']}")
+            for n in aj["notas"]: st.info(n)
+
+            rep_data = []
+            def check_v(label, p_r, cuota):
+                p_c = (1 / cuota if cuota > 0 else 1) * 100
+                diff = p_r - p_c
+                status = "✅ VALOR" if diff > 5 else "❌ RIESGO" if diff < -5 else "⚠️ JUSTO"
+                st.write(f"**{label}**: {status} (Real: {round(p_r,1)}% | Casa: {round(p_c,1)}%)")
+                return f"- {label}: {status} ({round(p_r,1)}%)"
+
+            rep_data.append(check_v(f"Gana {e1['nombre']}", p_l, cl))
+            rep_data.append(check_v("Over 1.5", p_o15, co15))
+            rep_data.append(check_v("Over 2.5", p_o25, co25))
+            rep_data.append(check_v("Under 2.5", (100-p_o25), cu25))
+            rep_data.append(check_v("BTTS (Ambos Marcan)", p_btts, cbtts))
             
-            def check_val(label, p_r, cuota):
-                # Protección básica contra división por cero si la cuota es 0
-                cu
+            # Guardar reporte completo
+            full_rep = f"⚽ {e1['nombre']} vs {e2['nombre']}\n" + "\n".join(rep_data)
+            st.session_state['historial'].insert(0, full_rep)
+        else:
+            st.error("No se detectaron 2 equipos. Asegúrate de incluir 'ÚLTIMOS PARTIDOS' en el texto.")
+
+    st.button("🗑️ BORRAR", on_click=limpiar_futbol, key="b_c_f")
+
+with tab3:
+    st.header("Historial Detallado")
+    if st.session_state['historial']:
+        txt_h = "\n\n---\n\n".join(st.session_state['historial'])
+        st.text_area("Reportes Guardados:", value=txt_h, height=350)
+        u_hist = urllib.parse.quote(txt_h)
+        mail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to=williamvg120@gmail.com&su=Reporte_Apuestas&body={u_hist}"
+        st.markdown(f'<a href="{mail_url}" target="_blank" style="text-decoration:none;"><div style="background-color:#ff4b4b;color:white;padding:12px;text-align:center;border-radius:8px;font-weight:bold;">📩 ENVIAR REPORTE COMPLETO</div></a>', unsafe_allow_html=True)
+    else:
+        st.write("Aún no hay análisis en el historial.")
