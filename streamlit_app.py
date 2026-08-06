@@ -24,7 +24,7 @@ client = obtener_cliente_gspread()
 sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
 # ---------------------------------------------------------
-# CARGA Y LIMPIEZA DE DATOS
+# CARGA ROBUSTA CON PREVENCIÓN DE COLUMNAS DUPLICADAS
 # ---------------------------------------------------------
 def cargar_o_crear_hoja(nombre_hoja, columnas_defecto):
     try:
@@ -42,10 +42,13 @@ def cargar_o_crear_hoja(nombre_hoja, columnas_defecto):
     encabezados = [str(c).strip() for c in filas[0]]
     datos = filas[1:]
 
-    # Filtrar filas vacías
+    # Filtrar filas completamente vacías
     datos_limpios = [r for r in datos if any(str(cell).strip() != "" for cell in r)]
 
     df = pd.DataFrame(datos_limpios, columns=encabezados)
+
+    # === CORRECCIÓN DEL ERROR: ELIMINAR COLUMNAS DUPLICADAS EN EL DATAFRAME ===
+    df = df.loc[:, ~df.columns.duplicated()].copy()
 
     # Asegurar que existan todas las columnas clave
     for col in columnas_defecto:
@@ -54,7 +57,7 @@ def cargar_o_crear_hoja(nombre_hoja, columnas_defecto):
 
     return ws, df
 
-# Estandarización de columnas con Moneda y Tasa en Producción
+# Estandarización de columnas
 COLUMNAS_PROD = [
     "Orden", "Fecha", "Mecanico", "Moto", "Trabajo", 
     "Moneda", "Monto_Cobrado", "Tasa", "Mano_Obra_USD", "Comision_Pct", "Ganancia_USD"
@@ -67,7 +70,7 @@ COLUMNAS_VALES = [
 ws_prod, df_prod = cargar_o_crear_hoja("PRODUCCION", COLUMNAS_PROD)
 ws_vales, df_vales = cargar_o_crear_hoja("VALES", COLUMNAS_VALES)
 
-# FUNCIÓN PARA CONVERTIR TEXTO A NÚMERO
+# FUNCIÓN PARA CONVERTIR TEXTO A NÚMERO (CORRIGE COMAS Y PUNTOS)
 def a_numero(serie):
     if serie is None or len(serie) == 0:
         return pd.Series(dtype=float)
@@ -135,7 +138,7 @@ with tab_dash:
     c4.metric("Neto por Pagar", f"${neto_pagar:.2f}")
 
 # ---------------------------------------------------------
-# TAB 2: PRODUCCIÓN (REGISTRO DE TRABAJOS EN USD O VES)
+# TAB 2: PRODUCCIÓN
 # ---------------------------------------------------------
 with tab_prod:
     st.subheader("Registrar Nuevo Trabajo")
@@ -160,7 +163,6 @@ with tab_prod:
         btn_prod = st.form_submit_button("💾 Guardar Trabajo")
         
         if btn_prod:
-            # Calcular equivalente en USD si el cobro fue en Bolívares
             if moneda_p == "VES":
                 mano_obra_usd = monto_cobrado / tasa_p if tasa_p > 0 else 0.0
             else:
