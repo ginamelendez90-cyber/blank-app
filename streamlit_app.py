@@ -25,6 +25,47 @@ client = obtener_cliente_gspread()
 sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
 # ---------------------------------------------------------
+# GESTIÓN DE LA TASA EN GOOGLE SHEETS (CONFIGURACIÓN)
+# ---------------------------------------------------------
+def obtener_ws_config():
+    try:
+        ws = sheet.worksheet("CONFIGURACION")
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sheet.add_worksheet(title="CONFIGURACION", rows="10", cols="2")
+        ws.append_row(["Clave", "Valor"])
+        ws.append_row(["Tasa_Dia", "40.80"])
+    return ws
+
+def cargar_tasa_guardada():
+    ws = obtener_ws_config()
+    datos = ws.get_all_records()
+    for fila in datos:
+        if str(fila.get("Clave")).strip() == "Tasa_Dia":
+            try:
+                return float(str(fila.get("Valor")).replace(",", "."))
+            except ValueError:
+                return 40.80
+    return 40.80
+
+def guardar_nueva_tasa(nueva_tasa):
+    ws = obtener_ws_config()
+    filas = ws.get_all_values()
+    
+    fila_idx = None
+    for idx, row in enumerate(filas):
+        if len(row) > 0 and row[0].strip() == "Tasa_Dia":
+            fila_idx = idx + 1
+            break
+            
+    if fila_idx:
+        ws.update_cell(fila_idx, 2, str(round(nueva_tasa, 2)))
+    else:
+        ws.append_row(["Tasa_Dia", str(round(nueva_tasa, 2))])
+
+if "tasa_cambio" not in st.session_state:
+    st.session_state.tasa_cambio = cargar_tasa_guardada()
+
+# ---------------------------------------------------------
 # COLUMNAS OFICIALES Y UTILIDADES
 # ---------------------------------------------------------
 COLUMNAS_PROD = [
@@ -51,7 +92,7 @@ def a_numero(val):
         return 0.0
 
 # ---------------------------------------------------------
-# CARGA Y REPARACIÓN AUTOMÁTICA DE GOOGLE SHEETS
+# CARGA Y REPARACIÓN AUTOMÁTICA DE TABLAS
 # ---------------------------------------------------------
 def cargar_y_reparar_hoja(nombre_hoja, columnas_oficiales):
     try:
@@ -68,7 +109,6 @@ def cargar_y_reparar_hoja(nombre_hoja, columnas_oficiales):
 
     encabezados_actuales = [str(c).strip() for c in filas[0]]
     
-    # Auto-reparar el encabezado en Google Sheets si es viejos o faltan columnas
     if len(encabezados_actuales) != len(columnas_oficiales) or encabezados_actuales != columnas_oficiales:
         try:
             ws.update([columnas_oficiales], 'A1')
@@ -80,7 +120,6 @@ def cargar_y_reparar_hoja(nombre_hoja, columnas_oficiales):
     datos_limpios = []
     
     for r in datos:
-        # Rellenar columnas faltantes en registros viejos
         fila_padded = r + [""] * (len(columnas_oficiales) - len(r))
         fila_padded = fila_padded[:len(columnas_oficiales)]
         if any(str(cell).strip() != "" for cell in fila_padded):
@@ -162,18 +201,26 @@ if not df_vales.empty:
 
 lista_mecanicos = sorted(list(set(mecanicos_defecto + [m for m in mecanicos_registrados if str(m).strip()])))
 
-if "tasa_cambio" not in st.session_state:
-    st.session_state.tasa_cambio = 40.80
-
 # ---------------------------------------------------------
-# BARRA LATERAL
+# BARRA LATERAL CON PERSISTENCIA DE TASA
 # ---------------------------------------------------------
 st.sidebar.title("⚙️ Configuración Taller")
-st.session_state.tasa_cambio = st.sidebar.number_input(
-    "Tasa del Día (VES/USD):",
-    value=float(st.session_state.tasa_cambio),
-    min_value=1.0, step=0.10, format="%.2f"
-)
+
+with st.sidebar.form("form_tasa"):
+    tasa_input = st.number_input(
+        "Tasa del Día (VES/USD):",
+        value=float(st.session_state.tasa_cambio),
+        min_value=1.0, step=0.10, format="%.2f"
+    )
+    btn_guardar_tasa = st.form_submit_button("💾 Guardar Tasa en Sheets")
+
+    if btn_guardar_tasa:
+        guardar_nueva_tasa(tasa_input)
+        st.session_state.tasa_cambio = tasa_input
+        st.success(f"✅ Tasa guardada: {tasa_input:.2f} VES/USD")
+        st.rerun()
+
+st.sidebar.info(f"📌 Tasa Activa: **{st.session_state.tasa_cambio:.2f} VES/USD**")
 
 # ---------------------------------------------------------
 # PANEL PRINCIPAL
@@ -188,14 +235,25 @@ tab_dash, tab_prod, tab_vales, tab_liq = st.tabs(["📊 Dashboard", "🛠️ Pro
 with tab_dash:
     total_mo = df_prod["Mano_Obra_USD"].sum() if not df_prod.empty else 0.0
     total_com = df_prod["Ganancia_USD"].sum() if not df_prod.empty else 0.0
+    ganancia_dueno = total_mo - total_com  # Margen que le queda al taller
     total_val = df_vales["Total_USD"].sum() if not df_vales.empty else 0.0
     neto_pagar = total_com - total_val
     
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Facturado Total (USD)", f"${total_mo:.2f}")
-    c2.metric("Comisiones Ganadas", f"${total_com:.2f}")
-    c3.metric("Vales Entregados", f"${total_val:.2f}")
-    c4.metric("Neto por Pagar", f"${neto_pagar:.2f}")
+    st.subheader("📊 Ingresos y Ganancias del Taller")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Facturado Total (Mano de Obra)", f"${total_mo:.2f}")
+    c2.metric(
+        "🏢 Ganancia del Dueño / Taller", 
+        f"${ganancia_dueno:.2f}", 
+        delta=f"{(ganancia_dueno/total_mo*100):.1f}% de M.O" if total_mo > 0 else None
+    )
+    c3.metric("🔧 Comisiones Mecánicos", f"${total_com:.2f}")
+
+    st.markdown("---")
+    st.subheader("💵 Balance y Liquidación de Mecánicos")
+    c4, c5 = st.columns(2)
+    c4.metric("Vales Entregados", f"${total_val:.2f}")
+    c5.metric("Neto Pendiente por Pagar", f"${neto_pagar:.2f}")
 
 # ---------------------------------------------------------
 # TAB 2: PRODUCCIÓN
@@ -251,7 +309,7 @@ with tab_prod:
     st.markdown("---")
     st.subheader("Histórico de Producción")
     cols_mostrar_prod = [c for c in COLUMNAS_PROD if c in df_prod.columns]
-    st.dataframe(df_prod[cols_mostrar_prod], use_container_width=True)
+    st.dataframe(df_prod[cols_mostrar_prod], use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------
 # TAB 3: VALES
@@ -293,7 +351,7 @@ with tab_vales:
 
     st.markdown("---")
     cols_mostrar_vales = [c for c in COLUMNAS_VALES if c in df_vales.columns]
-    st.dataframe(df_vales[cols_mostrar_vales], use_container_width=True)
+    st.dataframe(df_vales[cols_mostrar_vales], use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------
 # TAB 4: LIQUIDACIÓN
@@ -330,4 +388,4 @@ with tab_liq:
         })
     
     df_liq = pd.DataFrame(liq_rows)
-    st.dataframe(df_liq, use_container_width=True)
+    st.dataframe(df_liq, use_container_width=True, hide_index=True)
