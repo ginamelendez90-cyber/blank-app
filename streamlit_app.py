@@ -25,92 +25,8 @@ client = obtener_cliente_gspread()
 sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
 # ---------------------------------------------------------
-# NORMALIZACIÓN INTELIGENTE DE TEXTO Y COLUMNAS
+# COLUMNAS OFICIALES Y UTILIDADES
 # ---------------------------------------------------------
-def quitar_acentos_y_espacios(texto):
-    if not isinstance(texto, str):
-        return ""
-    # Eliminar acentos/tildes y convertir a minúsculas
-    texto_norm = unicodedata.normalize('NFD', texto).encode('ascii', 'ignore').decode('utf-8')
-    return texto_norm.strip().lower()
-
-def estandarizar_dataframe(df, columnas_objetivo):
-    if df.empty:
-        return pd.DataFrame(columns=columnas_objetivo)
-    
-    mapa_renombrar = {}
-    for col in df.columns:
-        col_norm = quitar_acentos_y_espacios(str(col)).replace(" ", "_")
-        
-        if "mecanic" in col_norm:
-            mapa_renombrar[col] = "Mecanico"
-        elif "ganancia" in col_norm:
-            mapa_renombrar[col] = "Ganancia_USD"
-        elif "mano" in col_norm or "monto_cobrado" in col_norm:
-            mapa_renombrar[col] = "Monto_Cobrado"
-        elif "obra_usd" in col_norm or "mano_obra" in col_norm:
-            mapa_renombrar[col] = "Mano_Obra_USD"
-        elif "comision" in col_norm:
-            mapa_renombrar[col] = "Comision_Pct"
-        elif "moneda" in col_norm:
-            mapa_renombrar[col] = "Moneda"
-        elif "tasa" in col_norm:
-            mapa_renombrar[col] = "Tasa"
-        elif "orden" in col_norm:
-            mapa_renombrar[col] = "Orden"
-        elif "fecha" in col_norm:
-            mapa_renombrar[col] = "Fecha"
-        elif "moto" in col_norm:
-            mapa_renombrar[col] = "Moto"
-        elif "trabajo" in col_norm:
-            mapa_renombrar[col] = "Trabajo"
-        elif "vale" in col_norm:
-            mapa_renombrar[col] = "Vale"
-        elif "concepto" in col_norm:
-            mapa_renombrar[col] = "Concepto"
-        elif "monto" in col_norm and "total" not in col_norm:
-            mapa_renombrar[col] = "Monto"
-        elif "total" in col_norm:
-            mapa_renombrar[col] = "Total_USD"
-        elif "forma" in col_norm or "pago" in col_norm:
-            mapa_renombrar[col] = "Forma_Pago"
-
-    df = df.rename(columns=mapa_renombrar)
-    df = df.loc[:, ~df.columns.duplicated()].copy()
-    
-    for col in columnas_objetivo:
-        if col not in df.columns:
-            df[col] = ""
-            
-    return df
-
-# ---------------------------------------------------------
-# CARGA DE HOJAS
-# ---------------------------------------------------------
-def cargar_hoja(nombre_hoja, columnas_defecto):
-    try:
-        ws = sheet.worksheet(nombre_hoja)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sheet.add_worksheet(title=nombre_hoja, rows="100", cols=str(len(columnas_defecto)))
-        ws.append_row(columnas_defecto)
-
-    filas = ws.get_all_values()
-
-    if not filas or len(filas) < 1:
-        ws.append_row(columnas_defecto)
-        return ws, pd.DataFrame(columns=columnas_defecto)
-
-    encabezados = [str(c).strip() for c in filas[0]]
-    datos = filas[1:]
-
-    # Filtrar filas vacías
-    datos_limpios = [r for r in datos if any(str(cell).strip() != "" for cell in r)]
-
-    df = pd.DataFrame(datos_limpios, columns=encabezados)
-    df = estandarizar_dataframe(df, columnas_defecto)
-
-    return ws, df
-
 COLUMNAS_PROD = [
     "Orden", "Fecha", "Mecanico", "Moto", "Trabajo", 
     "Moneda", "Monto_Cobrado", "Tasa", "Mano_Obra_USD", "Comision_Pct", "Ganancia_USD"
@@ -119,38 +35,131 @@ COLUMNAS_VALES = [
     "Vale", "Fecha", "Mecanico", "Concepto", "Monto", "Moneda", "Tasa", "Total_USD", "Forma_Pago"
 ]
 
-ws_prod, df_prod = cargar_hoja("PRODUCCION", COLUMNAS_PROD)
-ws_vales, df_vales = cargar_hoja("VALES", COLUMNAS_VALES)
+def quitar_acentos_y_espacios(texto):
+    if not isinstance(texto, str):
+        return ""
+    texto_norm = unicodedata.normalize('NFD', texto).encode('ascii', 'ignore').decode('utf-8')
+    return texto_norm.strip().lower()
 
-# FUNCIÓN PARA CONVERTIR TEXTO A NÚMERO ROBUSTA
-def a_numero(serie):
-    if serie is None or len(serie) == 0:
-        return pd.Series(dtype=float)
-    limpio = serie.astype(str).str.replace(",", ".").str.replace("$", "").str.replace("Bs", "").str.strip()
-    return pd.to_numeric(limpio, errors="coerce").fillna(0.0)
+def a_numero(val):
+    if pd.isna(val) or val is None:
+        return 0.0
+    s = str(val).replace(",", ".").replace("$", "").replace("Bs", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
 
-# Limpieza y conversión numérica en Producción
+# ---------------------------------------------------------
+# CARGA Y REPARACIÓN AUTOMÁTICA DE GOOGLE SHEETS
+# ---------------------------------------------------------
+def cargar_y_reparar_hoja(nombre_hoja, columnas_oficiales):
+    try:
+        ws = sheet.worksheet(nombre_hoja)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sheet.add_worksheet(title=nombre_hoja, rows="100", cols=str(len(columnas_oficiales)))
+        ws.append_row(columnas_oficiales)
+
+    filas = ws.get_all_values()
+
+    if not filas or len(filas) == 0:
+        ws.append_row(columnas_oficiales)
+        return ws, pd.DataFrame(columns=columnas_oficiales)
+
+    encabezados_actuales = [str(c).strip() for c in filas[0]]
+    
+    # Auto-reparar el encabezado en Google Sheets si es viejos o faltan columnas
+    if len(encabezados_actuales) != len(columnas_oficiales) or encabezados_actuales != columnas_oficiales:
+        try:
+            ws.update([columnas_oficiales], 'A1')
+        except Exception:
+            pass
+        encabezados_actuales = columnas_oficiales
+
+    datos = filas[1:]
+    datos_limpios = []
+    
+    for r in datos:
+        # Rellenar columnas faltantes en registros viejos
+        fila_padded = r + [""] * (len(columnas_oficiales) - len(r))
+        fila_padded = fila_padded[:len(columnas_oficiales)]
+        if any(str(cell).strip() != "" for cell in fila_padded):
+            datos_limpios.append(fila_padded)
+
+    df = pd.DataFrame(datos_limpios, columns=columnas_oficiales)
+    return ws, df
+
+ws_prod, df_prod = cargar_y_reparar_hoja("PRODUCCION", COLUMNAS_PROD)
+ws_vales, df_vales = cargar_y_reparar_hoja("VALES", COLUMNAS_VALES)
+
+# ---------------------------------------------------------
+# PROCESAMIENTO DINÁMICO Y CÁLCULO DE MONTOS
+# ---------------------------------------------------------
 if not df_prod.empty:
-    df_prod["Monto_Cobrado"] = a_numero(df_prod["Monto_Cobrado"])
-    df_prod["Tasa"] = a_numero(df_prod["Tasa"])
-    df_prod["Mano_Obra_USD"] = a_numero(df_prod["Mano_Obra_USD"])
-    df_prod["Comision_Pct"] = a_numero(df_prod["Comision_Pct"])
-    df_prod["Ganancia_USD"] = a_numero(df_prod["Ganancia_USD"])
+    df_prod["Monto_Cobrado_Num"] = df_prod["Monto_Cobrado"].apply(a_numero)
+    df_prod["Tasa_Num"] = df_prod["Tasa"].apply(a_numero)
+    df_prod["Mano_Obra_USD_Existente"] = df_prod["Mano_Obra_USD"].apply(a_numero)
+    df_prod["Comision_Pct_Num"] = df_prod["Comision_Pct"].apply(a_numero)
+
+    def calcular_mo_usd(row):
+        moneda = str(row["Moneda"]).upper().strip()
+        monto = row["Monto_Cobrado_Num"]
+        tasa = row["Tasa_Num"]
+        mo_exist = row["Mano_Obra_USD_Existente"]
+        
+        if moneda == "VES" and tasa > 0 and monto > 0:
+            return round(monto / tasa, 2)
+        elif moneda == "USD" and monto > 0:
+            return round(monto, 2)
+        elif monto > 0:
+            return round(monto, 2)
+        elif mo_exist > 0:
+            return round(mo_exist, 2)
+        return 0.0
+
+    df_prod["Mano_Obra_USD"] = df_prod.apply(calcular_mo_usd, axis=1)
+    df_prod["Ganancia_USD"] = df_prod.apply(lambda r: round(r["Mano_Obra_USD"] * (r["Comision_Pct_Num"] / 100.0), 2), axis=1)
     df_prod["Mecanico_Clean"] = df_prod["Mecanico"].apply(quitar_acentos_y_espacios)
+else:
+    df_prod["Mano_Obra_USD"] = 0.0
+    df_prod["Ganancia_USD"] = 0.0
+    df_prod["Mecanico_Clean"] = ""
 
-# Limpieza y conversión numérica en Vales
 if not df_vales.empty:
-    df_vales["Monto"] = a_numero(df_vales["Monto"])
-    df_vales["Tasa"] = a_numero(df_vales["Tasa"])
-    df_vales["Total_USD"] = a_numero(df_vales["Total_USD"])
-    df_vales["Mecanico_Clean"] = df_vales["Mecanico"].apply(quitar_acentos_y_espacios)
+    df_vales["Monto_Num"] = df_vales["Monto"].apply(a_numero)
+    df_vales["Tasa_Num"] = df_vales["Tasa"].apply(a_numero)
+    df_vales["Total_USD_Existente"] = df_vales["Total_USD"].apply(a_numero)
 
-# Lista de mecánicos
+    def calcular_vale_usd(row):
+        moneda = str(row["Moneda"]).upper().strip()
+        monto = row["Monto_Num"]
+        tasa = row["Tasa_Num"]
+        val_exist = row["Total_USD_Existente"]
+
+        if moneda == "VES" and tasa > 0 and monto > 0:
+            return round(monto / tasa, 2)
+        elif moneda == "USD" and monto > 0:
+            return round(monto, 2)
+        elif monto > 0:
+            return round(monto, 2)
+        elif val_exist > 0:
+            return round(val_exist, 2)
+        return 0.0
+
+    df_vales["Total_USD"] = df_vales.apply(calcular_vale_usd, axis=1)
+    df_vales["Mecanico_Clean"] = df_vales["Mecanico"].apply(quitar_acentos_y_espacios)
+else:
+    df_vales["Total_USD"] = 0.0
+    df_vales["Mecanico_Clean"] = ""
+
+# Lista de Mecánicos Única
 mecanicos_defecto = ["Carlos Pérez", "Pedro Gómez", "Luis Rodríguez"]
-mecanicos_registrados = (
-    df_prod["Mecanico"].unique().tolist() + df_vales["Mecanico"].unique().tolist()
-    if not df_prod.empty else []
-)
+mecanicos_registrados = []
+if not df_prod.empty:
+    mecanicos_registrados += df_prod["Mecanico"].unique().tolist()
+if not df_vales.empty:
+    mecanicos_registrados += df_vales["Mecanico"].unique().tolist()
+
 lista_mecanicos = sorted(list(set(mecanicos_defecto + [m for m in mecanicos_registrados if str(m).strip()])))
 
 if "tasa_cambio" not in st.session_state:
@@ -241,7 +250,8 @@ with tab_prod:
 
     st.markdown("---")
     st.subheader("Histórico de Producción")
-    st.dataframe(df_prod.drop(columns=["Mecanico_Clean"], errors="ignore"), use_container_width=True)
+    cols_mostrar_prod = [c for c in COLUMNAS_PROD if c in df_prod.columns]
+    st.dataframe(df_prod[cols_mostrar_prod], use_container_width=True)
 
 # ---------------------------------------------------------
 # TAB 3: VALES
@@ -282,7 +292,8 @@ with tab_vales:
             st.rerun()
 
     st.markdown("---")
-    st.dataframe(df_vales.drop(columns=["Mecanico_Clean"], errors="ignore"), use_container_width=True)
+    cols_mostrar_vales = [c for c in COLUMNAS_VALES if c in df_vales.columns]
+    st.dataframe(df_vales[cols_mostrar_vales], use_container_width=True)
 
 # ---------------------------------------------------------
 # TAB 4: LIQUIDACIÓN
@@ -294,10 +305,11 @@ with tab_liq:
     for m in lista_mecanicos:
         m_norm = quitar_acentos_y_espacios(m)
         
-        # Coincidencia inmune a tildes y minúsculas
         if not df_prod.empty and "Mecanico_Clean" in df_prod.columns:
+            total_fact = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Mano_Obra_USD"].sum()
             gen = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Ganancia_USD"].sum()
         else:
+            total_fact = 0.0
             gen = 0.0
             
         if not df_vales.empty and "Mecanico_Clean" in df_vales.columns:
@@ -310,7 +322,8 @@ with tab_liq:
         
         liq_rows.append({
             "Mecánico": m,
-            "Ganancia Total ($)": round(gen, 2),
+            "Facturado Total ($)": round(total_fact, 2),
+            "Ganancia Comisión ($)": round(gen, 2),
             "Total Vales ($)": round(val, 2),
             "Saldo Neto ($)": round(neto, 2),
             "Saldo Neto (VES)": round(neto_ves, 2)
@@ -318,7 +331,3 @@ with tab_liq:
     
     df_liq = pd.DataFrame(liq_rows)
     st.dataframe(df_liq, use_container_width=True)
-    
-    with st.expander("🔍 Ver datos interpretados por el sistema (Diagnóstico)"):
-        st.write("Producción leída:", df_prod)
-        st.write("Vales leídos:", df_vales)
