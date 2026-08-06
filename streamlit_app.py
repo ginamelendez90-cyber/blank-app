@@ -7,7 +7,7 @@ import datetime
 st.set_page_config(page_title="Control Taller - Google Sheets", page_icon="🏍️", layout="wide")
 
 # ---------------------------------------------------------
-# CONEXIÓN DIRECTA CON GSPREAD
+# CONEXIÓN Y AUTENTICACIÓN
 # ---------------------------------------------------------
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -16,25 +16,43 @@ SCOPES = [
 
 @st.cache_resource
 def obtener_cliente_gspread():
-    # Carga las credenciales desde los secretos de Streamlit
     creds_dict = dict(st.secrets["connections"]["gsheets"])
     creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
     return gspread.authorize(creds)
 
 client = obtener_cliente_gspread()
-# Abre el libro de trabajo usando la URL configurada en los Secrets
 sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
-def cargar_hoja(nombre_hoja):
-    ws = sheet.worksheet(nombre_hoja)
+# ---------------------------------------------------------
+# FUNCIÓN AUTO-CORRECTIVA DE HOJAS
+# ---------------------------------------------------------
+def cargar_o_crear_hoja(nombre_hoja, columnas_defecto):
+    try:
+        ws = sheet.worksheet(nombre_hoja)
+    except gspread.exceptions.WorksheetNotFound:
+        # Si la pestaña no existe, la crea con los encabezados correspondientes
+        ws = sheet.add_worksheet(title=nombre_hoja, rows="1000", cols=str(len(columnas_defecto)))
+        ws.append_row(columnas_defecto)
+    
     datos = ws.get_all_records()
-    return pd.DataFrame(datos)
+    df = pd.DataFrame(datos)
+    
+    # Garantizar columnas mínimas si la hoja estaba vacía
+    for col in columnas_defecto:
+        if col not in df.columns:
+            df[col] = None
+            
+    return ws, df
 
-# Cargar DataFrames
-df_prod = cargar_hoja("PRODUCCION")
-df_vales = cargar_hoja("VALES")
+# Definición de estructuras predeterminadas
+COLUMNAS_PROD = ["Orden", "Fecha", "Mecanico", "Moto", "Trabajo", "Mano_Obra_USD", "Comision_Pct", "Ganancia_USD"]
+COLUMNAS_VALES = ["Vale", "Fecha", "Mecanico", "Concepto", "Monto", "Moneda", "Tasa", "Total_USD", "Forma_Pago"]
 
-# Tasa de cambio
+# Carga segura
+ws_prod, df_prod = cargar_o_crear_hoja("PRODUCCION", COLUMNAS_PROD)
+ws_vales, df_vales = cargar_o_crear_hoja("VALES", COLUMNAS_VALES)
+
+# Tasa de cambio por defecto
 if "tasa_cambio" not in st.session_state:
     st.session_state.tasa_cambio = 40.80
 
@@ -73,7 +91,7 @@ with tab_dash:
     c4.metric("Neto por Pagar", f"${neto_pagar:.2f}")
 
 # ---------------------------------------------------------
-# TAB 2: PRODUCCIÓN (INSERTAR NUEVA FILA)
+# TAB 2: PRODUCCIÓN
 # ---------------------------------------------------------
 with tab_prod:
     st.subheader("Registrar Nuevo Trabajo")
@@ -94,28 +112,16 @@ with tab_prod:
         
         if btn_prod:
             ganancia = mano_obra * (comision_pct / 100.0)
-            nueva_fila = [
-                orden,
-                str(fecha_p),
-                mecanico_p,
-                moto,
-                trabajo,
-                mano_obra,
-                comision_pct,
-                ganancia
-            ]
-            
-            # Inserta únicamente la nueva fila al final
-            ws_prod = sheet.worksheet("PRODUCCION")
+            nueva_fila = [orden, str(fecha_p), mecanico_p, moto, trabajo, mano_obra, comision_pct, ganancia]
             ws_prod.append_row(nueva_fila)
-            st.success("✅ ¡Trabajo guardado exitosamente!")
+            st.success("✅ Trabajo registrado en Google Sheets.")
             st.rerun()
 
     st.markdown("---")
     st.dataframe(df_prod, use_container_width=True)
 
 # ---------------------------------------------------------
-# TAB 3: VALES (INSERTAR NUEVA FILA)
+# TAB 3: VALES
 # ---------------------------------------------------------
 with tab_vales:
     st.subheader("Registrar Vale")
@@ -127,7 +133,7 @@ with tab_vales:
         mecanico_v = v3.selectbox("Mecánico ", mecanicos)
         
         v4, v5, v6, v7 = st.columns(4)
-        concepto = v4.text_input("Concepto", placeholder="Ej: Pasajes / Avance")
+        concepto = v4.text_input("Concepto", placeholder="Ej: Pasajes / Adelanto")
         monto = v5.number_input("Monto Entregado", min_value=0.0, step=5.0)
         moneda = v6.selectbox("Moneda", ["USD", "VES"])
         tasa_v = v7.number_input("Tasa Aplicada", value=float(st.session_state.tasa_cambio))
@@ -137,22 +143,9 @@ with tab_vales:
         
         if btn_vale:
             total_usd = monto if moneda == "USD" else (monto / tasa_v if tasa_v > 0 else 0.0)
-            nuevo_vale = [
-                num_vale,
-                str(fecha_v),
-                mecanico_v,
-                concepto,
-                monto,
-                moneda,
-                tasa_v,
-                total_usd,
-                forma_pago
-            ]
-            
-            # Inserta únicamente la nueva fila al final
-            ws_vales = sheet.worksheet("VALES")
+            nuevo_vale = [num_vale, str(fecha_v), mecanico_v, concepto, monto, moneda, tasa_v, total_usd, forma_pago]
             ws_vales.append_row(nuevo_vale)
-            st.success("✅ Vale registrado exitosamente.")
+            st.success("✅ Vale registrado en Google Sheets.")
             st.rerun()
 
     st.markdown("---")
