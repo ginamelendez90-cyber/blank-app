@@ -3,6 +3,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 import datetime
+import unicodedata
 
 st.set_page_config(page_title="Control Taller - Google Sheets", page_icon="🏍️", layout="wide")
 
@@ -24,9 +25,69 @@ client = obtener_cliente_gspread()
 sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
 # ---------------------------------------------------------
-# CARGA ROBUSTA CON PREVENCIÓN DE COLUMNAS DUPLICADAS
+# NORMALIZACIÓN INTELIGENTE DE TEXTO Y COLUMNAS
 # ---------------------------------------------------------
-def cargar_o_crear_hoja(nombre_hoja, columnas_defecto):
+def quitar_acentos_y_espacios(texto):
+    if not isinstance(texto, str):
+        return ""
+    # Eliminar acentos/tildes y convertir a minúsculas
+    texto_norm = unicodedata.normalize('NFD', texto).encode('ascii', 'ignore').decode('utf-8')
+    return texto_norm.strip().lower()
+
+def estandarizar_dataframe(df, columnas_objetivo):
+    if df.empty:
+        return pd.DataFrame(columns=columnas_objetivo)
+    
+    mapa_renombrar = {}
+    for col in df.columns:
+        col_norm = quitar_acentos_y_espacios(str(col)).replace(" ", "_")
+        
+        if "mecanic" in col_norm:
+            mapa_renombrar[col] = "Mecanico"
+        elif "ganancia" in col_norm:
+            mapa_renombrar[col] = "Ganancia_USD"
+        elif "mano" in col_norm or "monto_cobrado" in col_norm:
+            mapa_renombrar[col] = "Monto_Cobrado"
+        elif "obra_usd" in col_norm or "mano_obra" in col_norm:
+            mapa_renombrar[col] = "Mano_Obra_USD"
+        elif "comision" in col_norm:
+            mapa_renombrar[col] = "Comision_Pct"
+        elif "moneda" in col_norm:
+            mapa_renombrar[col] = "Moneda"
+        elif "tasa" in col_norm:
+            mapa_renombrar[col] = "Tasa"
+        elif "orden" in col_norm:
+            mapa_renombrar[col] = "Orden"
+        elif "fecha" in col_norm:
+            mapa_renombrar[col] = "Fecha"
+        elif "moto" in col_norm:
+            mapa_renombrar[col] = "Moto"
+        elif "trabajo" in col_norm:
+            mapa_renombrar[col] = "Trabajo"
+        elif "vale" in col_norm:
+            mapa_renombrar[col] = "Vale"
+        elif "concepto" in col_norm:
+            mapa_renombrar[col] = "Concepto"
+        elif "monto" in col_norm and "total" not in col_norm:
+            mapa_renombrar[col] = "Monto"
+        elif "total" in col_norm:
+            mapa_renombrar[col] = "Total_USD"
+        elif "forma" in col_norm or "pago" in col_norm:
+            mapa_renombrar[col] = "Forma_Pago"
+
+    df = df.rename(columns=mapa_renombrar)
+    df = df.loc[:, ~df.columns.duplicated()].copy()
+    
+    for col in columnas_objetivo:
+        if col not in df.columns:
+            df[col] = ""
+            
+    return df
+
+# ---------------------------------------------------------
+# CARGA DE HOJAS
+# ---------------------------------------------------------
+def cargar_hoja(nombre_hoja, columnas_defecto):
     try:
         ws = sheet.worksheet(nombre_hoja)
     except gspread.exceptions.WorksheetNotFound:
@@ -42,22 +103,14 @@ def cargar_o_crear_hoja(nombre_hoja, columnas_defecto):
     encabezados = [str(c).strip() for c in filas[0]]
     datos = filas[1:]
 
-    # Filtrar filas completamente vacías
+    # Filtrar filas vacías
     datos_limpios = [r for r in datos if any(str(cell).strip() != "" for cell in r)]
 
     df = pd.DataFrame(datos_limpios, columns=encabezados)
-
-    # === CORRECCIÓN DEL ERROR: ELIMINAR COLUMNAS DUPLICADAS EN EL DATAFRAME ===
-    df = df.loc[:, ~df.columns.duplicated()].copy()
-
-    # Asegurar que existan todas las columnas clave
-    for col in columnas_defecto:
-        if col not in df.columns:
-            df[col] = ""
+    df = estandarizar_dataframe(df, columnas_defecto)
 
     return ws, df
 
-# Estandarización de columnas
 COLUMNAS_PROD = [
     "Orden", "Fecha", "Mecanico", "Moto", "Trabajo", 
     "Moneda", "Monto_Cobrado", "Tasa", "Mano_Obra_USD", "Comision_Pct", "Ganancia_USD"
@@ -66,32 +119,31 @@ COLUMNAS_VALES = [
     "Vale", "Fecha", "Mecanico", "Concepto", "Monto", "Moneda", "Tasa", "Total_USD", "Forma_Pago"
 ]
 
-# Carga de hojas
-ws_prod, df_prod = cargar_o_crear_hoja("PRODUCCION", COLUMNAS_PROD)
-ws_vales, df_vales = cargar_o_crear_hoja("VALES", COLUMNAS_VALES)
+ws_prod, df_prod = cargar_hoja("PRODUCCION", COLUMNAS_PROD)
+ws_vales, df_vales = cargar_hoja("VALES", COLUMNAS_VALES)
 
-# FUNCIÓN PARA CONVERTIR TEXTO A NÚMERO (CORRIGE COMAS Y PUNTOS)
+# FUNCIÓN PARA CONVERTIR TEXTO A NÚMERO ROBUSTA
 def a_numero(serie):
     if serie is None or len(serie) == 0:
         return pd.Series(dtype=float)
-    limpio = serie.astype(str).str.replace(",", ".").str.replace("$", "").str.strip()
+    limpio = serie.astype(str).str.replace(",", ".").str.replace("$", "").str.replace("Bs", "").str.strip()
     return pd.to_numeric(limpio, errors="coerce").fillna(0.0)
 
-# Limpieza en Producción
+# Limpieza y conversión numérica en Producción
 if not df_prod.empty:
     df_prod["Monto_Cobrado"] = a_numero(df_prod["Monto_Cobrado"])
     df_prod["Tasa"] = a_numero(df_prod["Tasa"])
     df_prod["Mano_Obra_USD"] = a_numero(df_prod["Mano_Obra_USD"])
     df_prod["Comision_Pct"] = a_numero(df_prod["Comision_Pct"])
     df_prod["Ganancia_USD"] = a_numero(df_prod["Ganancia_USD"])
-    df_prod["Mecanico"] = df_prod["Mecanico"].astype(str).str.strip()
+    df_prod["Mecanico_Clean"] = df_prod["Mecanico"].apply(quitar_acentos_y_espacios)
 
-# Limpieza en Vales
+# Limpieza y conversión numérica en Vales
 if not df_vales.empty:
     df_vales["Monto"] = a_numero(df_vales["Monto"])
     df_vales["Tasa"] = a_numero(df_vales["Tasa"])
     df_vales["Total_USD"] = a_numero(df_vales["Total_USD"])
-    df_vales["Mecanico"] = df_vales["Mecanico"].astype(str).str.strip()
+    df_vales["Mecanico_Clean"] = df_vales["Mecanico"].apply(quitar_acentos_y_espacios)
 
 # Lista de mecánicos
 mecanicos_defecto = ["Carlos Pérez", "Pedro Gómez", "Luis Rodríguez"]
@@ -99,9 +151,8 @@ mecanicos_registrados = (
     df_prod["Mecanico"].unique().tolist() + df_vales["Mecanico"].unique().tolist()
     if not df_prod.empty else []
 )
-lista_mecanicos = sorted(list(set(mecanicos_defecto + [m for m in mecanicos_registrados if m])))
+lista_mecanicos = sorted(list(set(mecanicos_defecto + [m for m in mecanicos_registrados if str(m).strip()])))
 
-# Tasa de cambio global
 if "tasa_cambio" not in st.session_state:
     st.session_state.tasa_cambio = 40.80
 
@@ -190,7 +241,7 @@ with tab_prod:
 
     st.markdown("---")
     st.subheader("Histórico de Producción")
-    st.dataframe(df_prod, use_container_width=True)
+    st.dataframe(df_prod.drop(columns=["Mecanico_Clean"], errors="ignore"), use_container_width=True)
 
 # ---------------------------------------------------------
 # TAB 3: VALES
@@ -231,7 +282,7 @@ with tab_vales:
             st.rerun()
 
     st.markdown("---")
-    st.dataframe(df_vales, use_container_width=True)
+    st.dataframe(df_vales.drop(columns=["Mecanico_Clean"], errors="ignore"), use_container_width=True)
 
 # ---------------------------------------------------------
 # TAB 4: LIQUIDACIÓN
@@ -241,8 +292,19 @@ with tab_liq:
     
     liq_rows = []
     for m in lista_mecanicos:
-        gen = df_prod[df_prod["Mecanico"] == m]["Ganancia_USD"].sum() if not df_prod.empty else 0.0
-        val = df_vales[df_vales["Mecanico"] == m]["Total_USD"].sum() if not df_vales.empty else 0.0
+        m_norm = quitar_acentos_y_espacios(m)
+        
+        # Coincidencia inmune a tildes y minúsculas
+        if not df_prod.empty and "Mecanico_Clean" in df_prod.columns:
+            gen = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Ganancia_USD"].sum()
+        else:
+            gen = 0.0
+            
+        if not df_vales.empty and "Mecanico_Clean" in df_vales.columns:
+            val = df_vales[df_vales["Mecanico_Clean"] == m_norm]["Total_USD"].sum()
+        else:
+            val = 0.0
+            
         neto = gen - val
         neto_ves = neto * st.session_state.tasa_cambio
         
@@ -256,3 +318,7 @@ with tab_liq:
     
     df_liq = pd.DataFrame(liq_rows)
     st.dataframe(df_liq, use_container_width=True)
+    
+    with st.expander("🔍 Ver datos interpretados por el sistema (Diagnóstico)"):
+        st.write("Producción leída:", df_prod)
+        st.write("Vales leídos:", df_vales)
