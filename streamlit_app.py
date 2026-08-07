@@ -383,7 +383,7 @@ else:
         st.dataframe(df_vales[cols_mostrar_vales], use_container_width=True, hide_index=True)
 
     with tab_liq:
-        st.subheader("🧮 Liquidación Detallada por Moneda")
+        st.subheader("🧮 Resumen de Liquidación a Pagar")
         
         liq_rows = []
         tasa_actual = float(st.session_state.tasa_cambio)
@@ -391,48 +391,79 @@ else:
         for m in lista_mecanicos:
             m_norm = quitar_acentos_y_espacios(m)
             
-            # --- PRODUCCIÓN / COMISIONES POR MONEDA ---
+            # --- SECTOR DÓLARES ---
             if not df_prod.empty and "Mecanico_Clean" in df_prod.columns:
                 df_m_prod = df_prod[df_prod["Mecanico_Clean"] == m_norm]
-                
-                # Trabajos cobrados en USD
                 prod_usd = df_m_prod[df_m_prod["Moneda"].astype(str).str.upper().str.strip() == "USD"]
                 gan_usd = prod_usd["Ganancia_USD"].sum()
                 
-                # Trabajos cobrados en VES (Comisión directa en Bs)
                 prod_ves = df_m_prod[df_m_prod["Moneda"].astype(str).str.upper().str.strip() == "VES"]
                 gan_ves = (prod_ves["Monto_Cobrado_Num"] * (prod_ves["Comision_Pct_Num"] / 100.0)).sum()
             else:
                 gan_usd = 0.0
                 gan_ves = 0.0
                 
-            # --- VALES POR MONEDA ---
+            # --- SECTOR BOLÍVARES ---
             if not df_vales.empty and "Mecanico_Clean" in df_vales.columns:
                 df_m_vales = df_vales[df_vales["Mecanico_Clean"] == m_norm]
-                
                 vales_usd = df_m_vales[df_m_vales["Moneda"].astype(str).str.upper().str.strip() == "USD"]["Monto_Num"].sum()
                 vales_ves = df_m_vales[df_m_vales["Moneda"].astype(str).str.upper().str.strip() == "VES"]["Monto_Num"].sum()
             else:
                 vales_usd = 0.0
                 vales_ves = 0.0
                 
-            # --- SALDOS POR MONEDA ---
             saldo_usd = gan_usd - vales_usd
             saldo_ves = gan_ves - vales_ves
             
-            # Total unificado equivalente en USD
-            neto_total_usd = saldo_usd + (saldo_ves / tasa_actual if tasa_actual > 0 else 0.0)
-            
             liq_rows.append({
                 "Mecánico": m,
-                "Ganado ($)": round(gan_usd, 2),
-                "Vales ($)": round(vales_usd, 2),
-                "Saldo USD ($)": round(saldo_usd, 2),
-                "Ganado (Bs)": round(gan_ves, 2),
-                "Vales (Bs)": round(vales_ves, 2),
-                "Saldo VES (Bs)": round(saldo_ves, 2),
-                "Neto Equiv. ($)": round(neto_total_usd, 2)
+                "Comisión USD ($)": round(gan_usd, 2),
+                "Vales USD ($)": round(vales_usd, 2),
+                "PAGO EN USD ($)": round(saldo_usd, 2),
+                "Comisión VES (Bs)": round(gan_ves, 2),
+                "Vales VES (Bs)": round(vales_ves, 2),
+                "PAGO EN VES (Bs)": round(saldo_ves, 2)
             })
         
         df_liq = pd.DataFrame(liq_rows)
+        
+        # Totales globales
+        tot_usd_pagar = df_liq["PAGO EN USD ($)"].sum()
+        tot_ves_pagar = df_liq["PAGO EN VES (Bs)"].sum()
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("💵 Total Pendiente a Pagar en Dólares", f"${tot_usd_pagar:.2f}")
+        m2.metric("🇻🇪 Total Pendiente a Pagar en Bolívares", f"{tot_ves_pagar:,.2f} Bs")
+        m3.metric("📌 Tasa de Cambio Activa", f"{tasa_actual:.2f} VES/USD")
+        
+        st.markdown("---")
+        st.subheader("📋 Tabla General de Liquidación")
         st.dataframe(df_liq, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.subheader("🧾 Recibo de Pago por Mecánico")
+        
+        mec_sel = st.selectbox("Seleccionar Mecánico para Liquidar:", lista_mecanicos)
+        
+        fila_mec = df_liq[df_liq["Mecanico"] == mec_sel]
+        if not fila_mec.empty:
+            p_usd = fila_mec["PAGO EN USD ($)"].values[0]
+            p_ves = fila_mec["PAGO EN VES (Bs)"].values[0]
+            
+            c_rec1, c_rec2 = st.columns(2)
+            
+            with c_rec1:
+                st.info(f"### 💵 Pago en Dólares: **${p_usd:.2f} USD**")
+                st.caption(f"Comisiones: ${fila_mec['Comisión USD ($)'].values[0]:.2f} - Vales: ${fila_mec['Vales USD ($)'].values[0]:.2f}")
+                
+            with c_rec2:
+                st.success(f"### 🇻🇪 Pago en Bolívares: **{p_ves:,.2f} Bs**")
+                st.caption(f"Comisiones: {fila_mec['Comisión VES (Bs)'].values[0]:,.2f} Bs - Vales: {fila_mec['Vales VES (Bs)'].values[0]:,.2f} Bs")
+
+            # Conversión opcional
+            if p_ves > 0 or p_usd > 0:
+                with st.expander("🔄 Ver conversión unificada de moneda"):
+                    total_todo_usd = p_usd + (p_ves / tasa_actual if tasa_actual > 0 else 0.0)
+                    total_todo_ves = (p_usd * tasa_actual) + p_ves
+                    st.write(f"* **Si pagas todo en USD:** ${total_todo_usd:.2f} USD")
+                    st.write(f"* **Si pagas todo en VES:** {total_todo_ves:,.2f} Bs")
