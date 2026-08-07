@@ -37,33 +37,48 @@ def obtener_ws_config():
     return ws
 
 def cargar_tasa_guardada():
-    ws = obtener_ws_config()
-    datos = ws.get_all_records()
-    for fila in datos:
-        if str(fila.get("Clave")).strip() == "Tasa_Dia":
-            try:
-                return float(str(fila.get("Valor")).replace(",", "."))
-            except ValueError:
-                return 40.80
+    try:
+        ws = obtener_ws_config()
+        datos = ws.get_all_records()
+        for fila in datos:
+            if str(fila.get("Clave")).strip() == "Tasa_Dia":
+                try:
+                    return float(str(fila.get("Valor")).replace(",", "."))
+                except ValueError:
+                    return 40.80
+    except Exception:
+        pass
     return 40.80
 
 def guardar_nueva_tasa(nueva_tasa):
-    ws = obtener_ws_config()
-    filas = ws.get_all_values()
-    
-    fila_idx = None
-    for idx, row in enumerate(filas):
-        if len(row) > 0 and row[0].strip() == "Tasa_Dia":
-            fila_idx = idx + 1
-            break
-            
-    if fila_idx:
-        ws.update_cell(fila_idx, 2, str(round(nueva_tasa, 2)))
-    else:
-        ws.append_row(["Tasa_Dia", str(round(nueva_tasa, 2))])
+    try:
+        ws = obtener_ws_config()
+        filas = ws.get_all_values()
+        
+        fila_idx = None
+        for idx, row in enumerate(filas):
+            if len(row) > 0 and row[0].strip() == "Tasa_Dia":
+                fila_idx = idx + 1
+                break
+                
+        if fila_idx:
+            ws.update_cell(fila_idx, 2, str(round(nueva_tasa, 2)))
+        else:
+            ws.append_row(["Tasa_Dia", str(round(nueva_tasa, 2))])
+    except Exception as e:
+        st.error(f"Error guardando tasa en Google Sheets: {e}")
 
-if "tasa_cambio" not in st.session_state:
-    st.session_state.tasa_cambio = cargar_tasa_guardada()
+def obtener_tasa_actual():
+    if "tasa_cambio" not in st.session_state or st.session_state.get("tasa_cambio") is None:
+        st.session_state["tasa_cambio"] = cargar_tasa_guardada()
+    try:
+        return float(st.session_state["tasa_cambio"])
+    except (ValueError, TypeError):
+        st.session_state["tasa_cambio"] = 40.80
+        return 40.80
+
+# Inicialización segura de tasa
+_ = obtener_tasa_actual()
 
 # ---------------------------------------------------------
 # COLUMNAS OFICIALES Y UTILIDADES
@@ -218,6 +233,8 @@ if rol == "🔑 Administrador (Dueño)":
     elif clave_ingresada != "":
         st.sidebar.error("Clave incorrecta")
 
+tasa_actual = obtener_tasa_actual()
+
 if es_admin:
     st.sidebar.markdown("---")
     st.sidebar.title("⚙️ Configuración Taller")
@@ -225,18 +242,18 @@ if es_admin:
     with st.sidebar.form("form_tasa"):
         tasa_input = st.number_input(
             "Tasa del Día (VES/USD):",
-            value=float(st.session_state.tasa_cambio),
+            value=tasa_actual,
             min_value=1.0, step=0.10, format="%.2f"
         )
         btn_guardar_tasa = st.form_submit_button("💾 Guardar Tasa en Sheets")
 
         if btn_guardar_tasa:
             guardar_nueva_tasa(tasa_input)
-            st.session_state.tasa_cambio = tasa_input
+            st.session_state["tasa_cambio"] = tasa_input
             st.sidebar.success(f"✅ Tasa guardada: {tasa_input:.2f} VES/USD")
             st.rerun()
 
-    st.sidebar.info(f"📌 Tasa Activa: **{st.session_state.tasa_cambio:.2f} VES/USD**")
+    st.sidebar.info(f"📌 Tasa Activa: **{obtener_tasa_actual():.2f} VES/USD**")
 
 # ---------------------------------------------------------
 # INTERFAZ
@@ -245,6 +262,7 @@ st.title("🏍️ Control de Taller")
 
 def mostrar_formulario_produccion(es_modo_admin=False):
     st.subheader("Registrar Trabajo Realizado")
+    t_actual = obtener_tasa_actual()
     
     with st.form("form_prod", clear_on_submit=True):
         f1, f2, f3 = st.columns(3)
@@ -262,13 +280,13 @@ def mostrar_formulario_produccion(es_modo_admin=False):
             c_mon, c_monto, c_tasa, c_com = st.columns(4)
             moneda_p = c_mon.selectbox("Moneda de Cobro", ["USD", "VES"])
             monto_cobrado = c_monto.number_input("Monto Mano de Obra", min_value=0.0, step=5.0)
-            tasa_p = c_tasa.number_input("Tasa Aplicada (VES/USD)", value=float(st.session_state.tasa_cambio))
+            tasa_p = c_tasa.number_input("Tasa Aplicada (VES/USD)", value=t_actual)
             comision_pct = c_com.slider("% Comisión Mecánico", min_value=0, max_value=100, value=50)
         else:
             c_mon, c_monto = st.columns(2)
             moneda_p = c_mon.selectbox("Moneda de Cobro", ["USD", "VES"])
             monto_cobrado = c_monto.number_input("Monto Mano de Obra", min_value=0.0, step=5.0)
-            tasa_p = float(st.session_state.tasa_cambio)
+            tasa_p = t_actual
             comision_pct = 50
         
         btn_prod = st.form_submit_button("💾 Guardar Trabajo")
@@ -291,7 +309,7 @@ def mostrar_formulario_produccion(es_modo_admin=False):
                 str(monto_cobrado),
                 str(tasa_p),
                 str(round(mano_obra_usd, 2)),
-                str(comision_pct),
+                str(round(comision_pct, 2)),
                 str(round(ganancia_usd, 2))
             ]
             
@@ -345,6 +363,7 @@ else:
 
     with tab_vales:
         st.subheader("Registrar Vale")
+        t_actual = obtener_tasa_actual()
         
         with st.form("form_vales", clear_on_submit=True):
             v1, v2, v3 = st.columns(3)
@@ -356,7 +375,7 @@ else:
             concepto = v4.text_input("Concepto", placeholder="Ej: Pasajes / Adelanto")
             monto = v5.number_input("Monto Entregado", min_value=0.0, step=5.0)
             moneda = v6.selectbox("Moneda", ["USD", "VES"])
-            tasa_v = v7.number_input("Tasa Aplicada", value=float(st.session_state.tasa_cambio))
+            tasa_v = v7.number_input("Tasa Aplicada", value=t_actual)
             forma_pago = st.selectbox("Forma Pago", ["Efectivo USD", "Efectivo VES", "Pago Móvil", "Transferencia"])
             
             btn_vale = st.form_submit_button("💵 Entregar Vale")
@@ -386,12 +405,12 @@ else:
         st.subheader("🧮 Resumen de Liquidación a Pagar")
         
         liq_rows = []
-        tasa_actual = float(st.session_state.tasa_cambio)
+        tasa_actual = obtener_tasa_actual()
         
         for m in lista_mecanicos:
             m_norm = quitar_acentos_y_espacios(m)
             
-            # --- SECTOR DÓLARES ---
+            # --- SECTOR DÓLARES Y BOLÍVARES ---
             if not df_prod.empty and "Mecanico_Clean" in df_prod.columns:
                 df_m_prod = df_prod[df_prod["Mecanico_Clean"] == m_norm]
                 prod_usd = df_m_prod[df_m_prod["Moneda"].astype(str).str.upper().str.strip() == "USD"]
@@ -403,7 +422,6 @@ else:
                 gan_usd = 0.0
                 gan_ves = 0.0
                 
-            # --- SECTOR BOLÍVARES ---
             if not df_vales.empty and "Mecanico_Clean" in df_vales.columns:
                 df_m_vales = df_vales[df_vales["Mecanico_Clean"] == m_norm]
                 vales_usd = df_m_vales[df_m_vales["Moneda"].astype(str).str.upper().str.strip() == "USD"]["Monto_Num"].sum()
@@ -416,7 +434,7 @@ else:
             saldo_ves = gan_ves - vales_ves
             
             liq_rows.append({
-                "Mecanico": m,  # Nombre estandarizado sin acento en clave interna
+                "Mecanico": m,
                 "Comisión USD ($)": round(gan_usd, 2),
                 "Vales USD ($)": round(vales_usd, 2),
                 "PAGO EN USD ($)": round(saldo_usd, 2),
@@ -439,7 +457,6 @@ else:
         st.markdown("---")
         st.subheader("📋 Tabla General de Liquidación")
         
-        # Renombramos la columna al mostrarla en pantalla
         df_liq_display = df_liq.rename(columns={"Mecanico": "Mecánico"})
         st.dataframe(df_liq_display, use_container_width=True, hide_index=True)
         
@@ -456,16 +473,30 @@ else:
             c_rec1, c_rec2 = st.columns(2)
             
             with c_rec1:
-                st.info(f"### 💵 Pago en Dólares: **${p_usd:.2f} USD**")
+                if p_usd < 0:
+                    st.error(f"### 🔴 Le debe al dueño: **${abs(p_usd):.2f} USD**")
+                else:
+                    st.info(f"### 💵 Pago en Dólares: **${p_usd:.2f} USD**")
                 st.caption(f"Comisiones: ${fila_mec['Comisión USD ($)'].values[0]:.2f} - Vales: ${fila_mec['Vales USD ($)'].values[0]:.2f}")
                 
             with c_rec2:
-                st.success(f"### 🇻🇪 Pago en Bolívares: **{p_ves:,.2f} Bs**")
+                if p_ves < 0:
+                    st.error(f"### 🔴 Le debe al dueño: **{abs(p_ves):,.2f} Bs**")
+                else:
+                    st.success(f"### 🇻🇪 Pago en Bolívares: **{p_ves:,.2f} Bs**")
                 st.caption(f"Comisiones: {fila_mec['Comisión VES (Bs)'].values[0]:,.2f} Bs - Vales: {fila_mec['Vales VES (Bs)'].values[0]:,.2f} Bs")
 
-            if p_ves > 0 or p_usd > 0:
+            if p_ves != 0 or p_usd != 0:
                 with st.expander("🔄 Ver conversión unificada de moneda"):
                     total_todo_usd = p_usd + (p_ves / tasa_actual if tasa_actual > 0 else 0.0)
                     total_todo_ves = (p_usd * tasa_actual) + p_ves
-                    st.write(f"* **Si pagas todo en USD:** ${total_todo_usd:.2f} USD")
-                    st.write(f"* **Si pagas todo en VES:** {total_todo_ves:,.2f} Bs")
+                    
+                    if total_todo_usd < 0:
+                        st.write(f"* **Estado Unificado (USD):** 🔴 Le debe al dueño **${abs(total_todo_usd):.2f} USD**")
+                    else:
+                        st.write(f"* **Si pagas todo en USD:** ${total_todo_usd:.2f} USD")
+                        
+                    if total_todo_ves < 0:
+                        st.write(f"* **Estado Unificado (VES):** 🔴 Le debe al dueño **{abs(total_todo_ves):,.2f} Bs**")
+                    else:
+                        st.write(f"* **Si pagas todo en VES:** {total_todo_ves:,.2f} Bs")
