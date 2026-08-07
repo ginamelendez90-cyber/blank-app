@@ -26,6 +26,54 @@ client = obtener_cliente_gspread()
 sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
 # ---------------------------------------------------------
+# GESTIÓN DE MECÁNICOS EN GOOGLE SHEETS
+# ---------------------------------------------------------
+def obtener_ws_mecanicos():
+    try:
+        ws = sheet.worksheet("MECANICOS")
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sheet.add_worksheet(title="MECANICOS", rows="20", cols="1")
+        ws.append_row(["Nombre"])
+        ws.append_rows([["Carlos Pérez"], ["Pedro Gómez"], ["Luis Rodríguez"]])
+    return ws
+
+def cargar_mecanicos():
+    try:
+        ws = obtener_ws_mecanicos()
+        filas = ws.get_all_values()
+        if len(filas) > 1:
+            mecanicos = [f[0].strip() for f in filas[1:] if len(f) > 0 and f[0].strip()]
+            if mecanicos:
+                return sorted(list(set(mecanicos)))
+    except Exception:
+        pass
+    return ["Carlos Pérez", "Pedro Gómez", "Luis Rodríguez"]
+
+def agregar_mecanico(nombre):
+    nombre = nombre.strip()
+    if not nombre:
+        return False, "El nombre no puede estar vacío."
+    ws = obtener_ws_mecanicos()
+    mecanicos_actuales = cargar_mecanicos()
+    if nombre.lower() in [m.lower() for m in mecanicos_actuales]:
+        return False, "El mecánico ya existe en la lista."
+    ws.append_row([nombre])
+    return True, f"Mecánico '{nombre}' agregado exitosamente."
+
+def eliminar_mecanico(nombre):
+    ws = obtener_ws_mecanicos()
+    filas = ws.get_all_values()
+    fila_a_borrar = None
+    for idx, r in enumerate(filas):
+        if idx > 0 and len(r) > 0 and r[0].strip().lower() == nombre.strip().lower():
+            fila_a_borrar = idx + 1
+            break
+    if fila_a_borrar:
+        ws.delete_rows(fila_a_borrar)
+        return True, f"Mecánico '{nombre}' eliminado exitosamente."
+    return False, "No se encontró el mecánico a eliminar."
+
+# ---------------------------------------------------------
 # GESTIÓN DE CONFIGURACIÓN EN GOOGLE SHEETS
 # ---------------------------------------------------------
 def obtener_ws_config():
@@ -88,6 +136,7 @@ def obtener_telefono_dueno():
 
 _ = obtener_tasa_actual()
 _ = obtener_telefono_dueno()
+lista_mecanicos = cargar_mecanicos()
 
 # ---------------------------------------------------------
 # COLUMNAS OFICIALES Y UTILIDADES
@@ -223,15 +272,6 @@ else:
     df_vales["Total_USD"] = 0.0
     df_vales["Mecanico_Clean"] = ""
 
-mecanicos_defecto = ["Carlos Pérez", "Pedro Gómez", "Luis Rodríguez"]
-mecanicos_registrados = []
-if not df_prod.empty:
-    mecanicos_registrados += df_prod["Mecanico"].unique().tolist()
-if not df_vales.empty:
-    mecanicos_registrados += df_vales["Mecanico"].unique().tolist()
-
-lista_mecanicos = sorted(list(set(mecanicos_defecto + [m for m in mecanicos_registrados if str(m).strip()])))
-
 # ---------------------------------------------------------
 # CONTROL DE ACCESO
 # ---------------------------------------------------------
@@ -279,6 +319,36 @@ if es_admin:
             st.sidebar.success("✅ Configuración actualizada")
             st.rerun()
 
+    st.sidebar.markdown("---")
+    st.sidebar.title("👥 Gestión de Mecánicos")
+
+    with st.sidebar.expander("➕ Registrar Nuevo Mecánico"):
+        with st.form("form_add_mec", clear_on_submit=True):
+            nuevo_nombre = st.text_input("Nombre y Apellido:")
+            btn_add_mec = st.form_submit_button("➕ Agregar Mecánico")
+            if btn_add_mec:
+                exito, msg = agregar_mecanico(nuevo_nombre)
+                if exito:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+    with st.sidebar.expander("🗑️ Eliminar Mecánico"):
+        if lista_mecanicos:
+            with st.form("form_del_mec", clear_on_submit=True):
+                mec_eliminar = st.selectbox("Seleccionar para eliminar:", lista_mecanicos)
+                btn_del_mec = st.form_submit_button("🗑️ Eliminar Mecánico")
+                if btn_del_mec:
+                    exito, msg = eliminar_mecanico(mec_eliminar)
+                    if exito:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+        else:
+            st.info("No hay mecánicos registrados.")
+
     st.sidebar.info(f"📌 **Tasa Activa:** {obtener_tasa_actual():.2f} VES/USD\n\n📲 **WhatsApp Dueño:** +{obtener_telefono_dueno()}")
 
 # ---------------------------------------------------------
@@ -290,7 +360,6 @@ def mostrar_formulario_produccion(es_modo_admin=False):
     st.subheader("Registrar Trabajo Realizado")
     t_actual = obtener_tasa_actual()
     
-    # Alerta de éxito + Botón directo de WhatsApp
     if "wa_url_exito" in st.session_state and st.session_state["wa_url_exito"]:
         st.success(f"✅ Trabajo registrado con éxito. ¡Envía el comprobante al dueño por WhatsApp!")
         st.link_button(
@@ -356,7 +425,6 @@ def mostrar_formulario_produccion(es_modo_admin=False):
             
             ws_prod.append_row(nueva_fila, value_input_option="USER_ENTERED")
             
-            # Construcción del mensaje formateado para WhatsApp
             msg_wa = (
                 f"🏍️ *NUEVO TRABAJO REGISTRADO*\n\n"
                 f"📌 *Orden:* {orden}\n"
@@ -374,7 +442,6 @@ def mostrar_formulario_produccion(es_modo_admin=False):
             st.session_state["wa_url_exito"] = wa_url
             st.rerun()
 
-    # --- SECCIÓN DE VERIFICACIÓN PARA EL DUEÑO ---
     if es_modo_admin and not df_prod.empty:
         st.markdown("---")
         st.subheader("🔍 Verificación Rápida de Trabajos (Dueño)")
@@ -504,7 +571,6 @@ else:
         for m in lista_mecanicos:
             m_norm = quitar_acentos_y_espacios(m)
             
-            # --- SECTOR DÓLARES Y BOLÍVARES ---
             if not df_prod.empty and "Mecanico_Clean" in df_prod.columns:
                 df_m_prod = df_prod[df_prod["Mecanico_Clean"] == m_norm]
                 prod_usd = df_m_prod[df_m_prod["Moneda"].astype(str).str.upper().str.strip() == "USD"]
@@ -556,40 +622,43 @@ else:
         st.markdown("---")
         st.subheader("🧾 Recibo de Pago por Mecánico")
         
-        mec_sel = st.selectbox("Seleccionar Mecánico para Liquidar:", lista_mecanicos)
-        
-        fila_mec = df_liq[df_liq["Mecanico"] == mec_sel]
-        if not fila_mec.empty:
-            p_usd = fila_mec["PAGO EN USD ($)"].values[0]
-            p_ves = fila_mec["PAGO EN VES (Bs)"].values[0]
+        if lista_mecanicos:
+            mec_sel = st.selectbox("Seleccionar Mecánico para Liquidar:", lista_mecanicos)
             
-            c_rec1, c_rec2 = st.columns(2)
-            
-            with c_rec1:
-                if p_usd < 0:
-                    st.error(f"### 🔴 Le debe al dueño: **${abs(p_usd):.2f} USD**")
-                else:
-                    st.info(f"### 💵 Pago en Dólares: **${p_usd:.2f} USD**")
-                st.caption(f"Comisiones: ${fila_mec['Comisión USD ($)'].values[0]:.2f} - Vales: ${fila_mec['Vales USD ($)'].values[0]:.2f}")
+            fila_mec = df_liq[df_liq["Mecanico"] == mec_sel]
+            if not fila_mec.empty:
+                p_usd = fila_mec["PAGO EN USD ($)"].values[0]
+                p_ves = fila_mec["PAGO EN VES (Bs)"].values[0]
                 
-            with c_rec2:
-                if p_ves < 0:
-                    st.error(f"### 🔴 Le debe al dueño: **{abs(p_ves):,.2f} Bs**")
-                else:
-                    st.success(f"### 🇻🇪 Pago en Bolívares: **{p_ves:,.2f} Bs**")
-                st.caption(f"Comisiones: {fila_mec['Comisión VES (Bs)'].values[0]:,.2f} Bs - Vales: {fila_mec['Vales VES (Bs)'].values[0]:,.2f} Bs")
-
-            if p_ves != 0 or p_usd != 0:
-                with st.expander("🔄 Ver conversión unificada de moneda"):
-                    total_todo_usd = p_usd + (p_ves / tasa_actual if tasa_actual > 0 else 0.0)
-                    total_todo_ves = (p_usd * tasa_actual) + p_ves
+                c_rec1, c_rec2 = st.columns(2)
+                
+                with c_rec1:
+                    if p_usd < 0:
+                        st.error(f"### 🔴 Le debe al dueño: **${abs(p_usd):.2f} USD**")
+                    else:
+                        st.info(f"### 💵 Pago en Dólares: **${p_usd:.2f} USD**")
+                    st.caption(f"Comisiones: ${fila_mec['Comisión USD ($)'].values[0]:.2f} - Vales: ${fila_mec['Vales USD ($)'].values[0]:.2f}")
                     
-                    if total_todo_usd < 0:
-                        st.write(f"* **Estado Unificado (USD):** 🔴 Le debe al dueño **${abs(total_todo_usd):.2f} USD**")
+                with c_rec2:
+                    if p_ves < 0:
+                        st.error(f"### 🔴 Le debe al dueño: **{abs(p_ves):,.2f} Bs**")
                     else:
-                        st.write(f"* **Si pagas todo en USD:** ${total_todo_usd:.2f} USD")
+                        st.success(f"### 🇻🇪 Pago en Bolívares: **{p_ves:,.2f} Bs**")
+                    st.caption(f"Comisiones: {fila_mec['Comisión VES (Bs)'].values[0]:,.2f} Bs - Vales: {fila_mec['Vales VES (Bs)'].values[0]:,.2f} Bs")
+
+                if p_ves != 0 or p_usd != 0:
+                    with st.expander("🔄 Ver conversión unificada de moneda"):
+                        total_todo_usd = p_usd + (p_ves / tasa_actual if tasa_actual > 0 else 0.0)
+                        total_todo_ves = (p_usd * tasa_actual) + p_ves
                         
-                    if total_todo_ves < 0:
-                        st.write(f"* **Estado Unificado (VES):** 🔴 Le debe al dueño **{abs(total_todo_ves):,.2f} Bs**")
-                    else:
-                        st.write(f"* **Si pagas todo en VES:** {total_todo_ves:,.2f} Bs")
+                        if total_todo_usd < 0:
+                            st.write(f"* **Estado Unificado (USD):** 🔴 Le debe al dueño **${abs(total_todo_usd):.2f} USD**")
+                        else:
+                            st.write(f"* **Si pagas todo en USD:** ${total_todo_usd:.2f} USD")
+                            
+                        if total_todo_ves < 0:
+                            st.write(f"* **Estado Unificado (VES):** 🔴 Le debe al dueño **{abs(total_todo_ves):,.2f} Bs**")
+                        else:
+                            st.write(f"* **Si pagas todo en VES:** {total_todo_ves:,.2f} Bs")
+        else:
+            st.info("Agrega un mecánico en la barra lateral para ver su liquidación.")
