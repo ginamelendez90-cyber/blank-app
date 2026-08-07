@@ -5,7 +5,7 @@ import pandas as pd
 import datetime
 import unicodedata
 
-st.set_page_config(page_title="CONTROL TALLER", page_icon="🏍️", layout="wide")
+st.set_page_config(page_title="Control Taller - Google Sheets", page_icon="🏍️", layout="wide")
 
 # ---------------------------------------------------------
 # CONEXIÓN Y AUTENTICACIÓN
@@ -201,9 +201,9 @@ if not df_vales.empty:
 lista_mecanicos = sorted(list(set(mecanicos_defecto + [m for m in mecanicos_registrados if str(m).strip()])))
 
 # ---------------------------------------------------------
-# CONTROL DE ACCESO (ROLES Y CLAVE DE ADMIN)
+# CONTROL DE ACCESO
 # ---------------------------------------------------------
-CLAVE_ADMIN = "1234"  # <--- Puedes cambiar esta clave si lo deseas
+CLAVE_ADMIN = "1234"
 
 st.sidebar.title("🔐 Acceso al Sistema")
 rol = st.sidebar.radio("Seleccionar Rol:", ["🛠️ Trabajadores (Mecánicos)", "🔑 Administrador (Dueño)"])
@@ -218,7 +218,6 @@ if rol == "🔑 Administrador (Dueño)":
     elif clave_ingresada != "":
         st.sidebar.error("Clave incorrecta")
 
-# Ajuste de Tasa (Solo visible para el Administrador)
 if es_admin:
     st.sidebar.markdown("---")
     st.sidebar.title("⚙️ Configuración Taller")
@@ -240,11 +239,10 @@ if es_admin:
     st.sidebar.info(f"📌 Tasa Activa: **{st.session_state.tasa_cambio:.2f} VES/USD**")
 
 # ---------------------------------------------------------
-# INTERFAZ SEGÚN EL ROL
+# INTERFAZ
 # ---------------------------------------------------------
 st.title("🏍️ Control de Taller")
 
-# FUNCION COMPARTIDA: FORMULARIO DE REGISTRO DE PRODUCCION
 def mostrar_formulario_produccion(es_modo_admin=False):
     st.subheader("Registrar Trabajo Realizado")
     
@@ -267,12 +265,11 @@ def mostrar_formulario_produccion(es_modo_admin=False):
             tasa_p = c_tasa.number_input("Tasa Aplicada (VES/USD)", value=float(st.session_state.tasa_cambio))
             comision_pct = c_com.slider("% Comisión Mecánico", min_value=0, max_value=100, value=50)
         else:
-            # En modo trabajador, la tasa y el % de comisión se calculan en segundo plano automáticamente
             c_mon, c_monto = st.columns(2)
             moneda_p = c_mon.selectbox("Moneda de Cobro", ["USD", "VES"])
             monto_cobrado = c_monto.number_input("Monto Mano de Obra", min_value=0.0, step=5.0)
             tasa_p = float(st.session_state.tasa_cambio)
-            comision_pct = 50  # Comisión por defecto para el cálculo interno
+            comision_pct = 50
         
         btn_prod = st.form_submit_button("💾 Guardar Trabajo")
         
@@ -305,7 +302,6 @@ def mostrar_formulario_produccion(es_modo_admin=False):
     st.markdown("---")
     st.subheader("Registro de Trabajos")
     
-    # Si es trabajador, se ocultan columnas sensibles como la ganancia final en USD o % comisión
     if es_modo_admin:
         cols_mostrar = [c for c in COLUMNAS_PROD if c in df_prod.columns]
     else:
@@ -314,14 +310,11 @@ def mostrar_formulario_produccion(es_modo_admin=False):
     st.dataframe(df_prod[cols_mostrar], use_container_width=True, hide_index=True)
 
 
-# RENDERIZADO POR ROL
 if not es_admin:
-    # VISTA TRABAJADOR
     st.info("💡 Modo Trabajador: Registra tus trabajos diarios. No tienes acceso a funciones administrativas.")
     mostrar_formulario_produccion(es_modo_admin=False)
 
 else:
-    # VISTA ADMINISTRADOR COMPLETA CON TODAS LAS PESTAÑAS
     tab_dash, tab_prod, tab_vales, tab_liq = st.tabs(["📊 Dashboard", "🛠️ Producción", "💵 Vales", "🧮 Liquidación"])
 
     with tab_dash:
@@ -390,34 +383,55 @@ else:
         st.dataframe(df_vales[cols_mostrar_vales], use_container_width=True, hide_index=True)
 
     with tab_liq:
-        st.subheader("🧮 Liquidación Calculada")
+        st.subheader("🧮 Liquidación Detallada por Moneda")
         
         liq_rows = []
+        tasa_actual = float(st.session_state.tasa_cambio)
+        
         for m in lista_mecanicos:
             m_norm = quitar_acentos_y_espacios(m)
             
+            # --- PRODUCCIÓN / COMISIONES POR MONEDA ---
             if not df_prod.empty and "Mecanico_Clean" in df_prod.columns:
-                total_fact = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Mano_Obra_USD"].sum()
-                gen = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Ganancia_USD"].sum()
-            else:
-                total_fact = 0.0
-                gen = 0.0
+                df_m_prod = df_prod[df_prod["Mecanico_Clean"] == m_norm]
                 
+                # Trabajos cobrados en USD
+                prod_usd = df_m_prod[df_m_prod["Moneda"].astype(str).str.upper().str.strip() == "USD"]
+                gan_usd = prod_usd["Ganancia_USD"].sum()
+                
+                # Trabajos cobrados en VES (Comisión directa en Bs)
+                prod_ves = df_m_prod[df_m_prod["Moneda"].astype(str).str.upper().str.strip() == "VES"]
+                gan_ves = (prod_ves["Monto_Cobrado_Num"] * (prod_ves["Comision_Pct_Num"] / 100.0)).sum()
+            else:
+                gan_usd = 0.0
+                gan_ves = 0.0
+                
+            # --- VALES POR MONEDA ---
             if not df_vales.empty and "Mecanico_Clean" in df_vales.columns:
-                val = df_vales[df_vales["Mecanico_Clean"] == m_norm]["Total_USD"].sum()
-            else:
-                val = 0.0
+                df_m_vales = df_vales[df_vales["Mecanico_Clean"] == m_norm]
                 
-            neto = gen - val
-            neto_ves = neto * st.session_state.tasa_cambio
+                vales_usd = df_m_vales[df_m_vales["Moneda"].astype(str).str.upper().str.strip() == "USD"]["Monto_Num"].sum()
+                vales_ves = df_m_vales[df_m_vales["Moneda"].astype(str).str.upper().str.strip() == "VES"]["Monto_Num"].sum()
+            else:
+                vales_usd = 0.0
+                vales_ves = 0.0
+                
+            # --- SALDOS POR MONEDA ---
+            saldo_usd = gan_usd - vales_usd
+            saldo_ves = gan_ves - vales_ves
+            
+            # Total unificado equivalente en USD
+            neto_total_usd = saldo_usd + (saldo_ves / tasa_actual if tasa_actual > 0 else 0.0)
             
             liq_rows.append({
                 "Mecánico": m,
-                "Facturado Total ($)": round(total_fact, 2),
-                "Ganancia Comisión ($)": round(gen, 2),
-                "Total Vales ($)": round(val, 2),
-                "Saldo Neto ($)": round(neto, 2),
-                "Saldo Neto (VES)": round(neto_ves, 2)
+                "Ganado ($)": round(gan_usd, 2),
+                "Vales ($)": round(vales_usd, 2),
+                "Saldo USD ($)": round(saldo_usd, 2),
+                "Ganado (Bs)": round(gan_ves, 2),
+                "Vales (Bs)": round(vales_ves, 2),
+                "Saldo VES (Bs)": round(saldo_ves, 2),
+                "Neto Equiv. ($)": round(neto_total_usd, 2)
             })
         
         df_liq = pd.DataFrame(liq_rows)
