@@ -77,7 +77,6 @@ def obtener_tasa_actual():
         st.session_state["tasa_cambio"] = 40.80
         return 40.80
 
-# Inicialización segura de tasa
 _ = obtener_tasa_actual()
 
 # ---------------------------------------------------------
@@ -85,7 +84,7 @@ _ = obtener_tasa_actual()
 # ---------------------------------------------------------
 COLUMNAS_PROD = [
     "Orden", "Fecha", "Mecanico", "Moto", "Trabajo", 
-    "Moneda", "Monto_Cobrado", "Tasa", "Mano_Obra_USD", "Comision_Pct", "Ganancia_USD"
+    "Moneda", "Monto_Cobrado", "Tasa", "Mano_Obra_USD", "Comision_Pct", "Ganancia_USD", "Estado"
 ]
 COLUMNAS_VALES = [
     "Vale", "Fecha", "Mecanico", "Concepto", "Monto", "Moneda", "Tasa", "Total_USD", "Forma_Pago"
@@ -154,6 +153,10 @@ if not df_prod.empty:
     df_prod["Tasa_Num"] = df_prod["Tasa"].apply(a_numero)
     df_prod["Mano_Obra_USD_Existente"] = df_prod["Mano_Obra_USD"].apply(a_numero)
     df_prod["Comision_Pct_Num"] = df_prod["Comision_Pct"].apply(a_numero)
+    
+    if "Estado" not in df_prod.columns:
+        df_prod["Estado"] = "⏳ Pendiente"
+    df_prod["Estado"] = df_prod["Estado"].apply(lambda x: x if str(x).strip() else "⏳ Pendiente")
 
     def calcular_mo_usd(row):
         moneda = str(row["Moneda"]).upper().strip()
@@ -178,6 +181,7 @@ else:
     df_prod["Mano_Obra_USD"] = 0.0
     df_prod["Ganancia_USD"] = 0.0
     df_prod["Mecanico_Clean"] = ""
+    df_prod["Estado"] = "⏳ Pendiente"
 
 if not df_vales.empty:
     df_vales["Monto_Num"] = df_vales["Monto"].apply(a_numero)
@@ -310,26 +314,64 @@ def mostrar_formulario_produccion(es_modo_admin=False):
                 str(tasa_p),
                 str(round(mano_obra_usd, 2)),
                 str(round(comision_pct, 2)),
-                str(round(ganancia_usd, 2))
+                str(round(ganancia_usd, 2)),
+                "⏳ Pendiente"
             ]
             
             ws_prod.append_row(nueva_fila, value_input_option="USER_ENTERED")
-            st.success("✅ Trabajo registrado correctamente.")
+            st.success("✅ Trabajo registrado correctamente (Queda pendiente por verificación).")
             st.rerun()
 
+    # --- SECCIÓN DE VERIFICACIÓN PARA EL DUEÑO ---
+    if es_modo_admin and not df_prod.empty:
+        st.markdown("---")
+        st.subheader("🔍 Verificación Rápida de Trabajos (Dueño)")
+        
+        df_pendientes = df_prod[df_prod["Estado"] == "⏳ Pendiente"]
+        
+        if not df_pendientes.empty:
+            st.warning(f"⚠️ Tienes **{len(df_pendientes)}** trabajo(s) pendiente(s) por verificar.")
+            
+            col_todo, _ = st.columns([1, 3])
+            if col_todo.button("✅ Verificar TODOS los Pendientes"):
+                col_estado_idx = COLUMNAS_PROD.index("Estado") + 1
+                for idx in df_pendientes.index:
+                    row_sheet = idx + 2
+                    ws_prod.update_cell(row_sheet, col_estado_idx, "✅ Verificado")
+                st.success("✅ ¡Todos los trabajos han sido verificados!")
+                st.rerun()
+                
+            st.markdown("##### Trabajos Por Aprobar:")
+            for idx, row in df_pendientes.iterrows():
+                with st.container():
+                    col_info, col_act = st.columns([4, 1])
+                    with col_info:
+                        st.write(f"**Orden:** {row['Orden']} | **Fecha:** {row['Fecha']} | **Mecánico:** {row['Mecanico']}")
+                        st.caption(f"🏍️ **Moto:** {row['Moto']} | 🛠️ **Trabajo:** {row['Trabajo']} | 💰 **Monto:** {row['Monto_Cobrado']} {row['Moneda']}")
+                    with col_act:
+                        if st.button("✅ Aprobar", key=f"v_btn_{idx}_{row['Orden']}"):
+                            col_estado_idx = COLUMNAS_PROD.index("Estado") + 1
+                            row_sheet = idx + 2
+                            ws_prod.update_cell(row_sheet, col_estado_idx, "✅ Verificado")
+                            st.success(f"Trabajo {row['Orden']} verificado.")
+                            st.rerun()
+                    st.markdown("---")
+        else:
+            st.success("🎉 ¡Todos los trabajos registrados están verificados!")
+
     st.markdown("---")
-    st.subheader("Registro de Trabajos")
+    st.subheader("📋 Registro Completo de Trabajos")
     
     if es_modo_admin:
         cols_mostrar = [c for c in COLUMNAS_PROD if c in df_prod.columns]
     else:
-        cols_mostrar = ["Orden", "Fecha", "Mecanico", "Moto", "Trabajo", "Moneda", "Monto_Cobrado"]
+        cols_mostrar = ["Orden", "Fecha", "Mecanico", "Moto", "Trabajo", "Moneda", "Monto_Cobrado", "Estado"]
         
     st.dataframe(df_prod[cols_mostrar], use_container_width=True, hide_index=True)
 
 
 if not es_admin:
-    st.info("💡 Modo Trabajador: Registra tus trabajos diarios. No tienes acceso a funciones administrativas.")
+    st.info("💡 Modo Trabajador: Registra tus trabajos diarios. Quedarán en revisión hasta que el dueño los verifique.")
     mostrar_formulario_produccion(es_modo_admin=False)
 
 else:
@@ -445,7 +487,6 @@ else:
         
         df_liq = pd.DataFrame(liq_rows)
         
-        # Totales globales
         tot_usd_pagar = df_liq["PAGO EN USD ($)"].sum() if not df_liq.empty else 0.0
         tot_ves_pagar = df_liq["PAGO EN VES (Bs)"].sum() if not df_liq.empty else 0.0
         
