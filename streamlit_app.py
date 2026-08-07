@@ -4,6 +4,7 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import datetime
 import unicodedata
+import urllib.parse
 
 st.set_page_config(page_title="Control Taller - Google Sheets", page_icon="🏍️", layout="wide")
 
@@ -25,7 +26,7 @@ client = obtener_cliente_gspread()
 sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
 # ---------------------------------------------------------
-# GESTIÓN DE LA TASA EN GOOGLE SHEETS
+# GESTIÓN DE CONFIGURACIÓN EN GOOGLE SHEETS
 # ---------------------------------------------------------
 def obtener_ws_config():
     try:
@@ -34,50 +35,59 @@ def obtener_ws_config():
         ws = sheet.add_worksheet(title="CONFIGURACION", rows="10", cols="2")
         ws.append_row(["Clave", "Valor"])
         ws.append_row(["Tasa_Dia", "40.80"])
+        ws.append_row(["Telefono_Dueno", "584120000000"])
     return ws
 
-def cargar_tasa_guardada():
+def cargar_config_guardada(clave, valor_defecto):
     try:
         ws = obtener_ws_config()
         datos = ws.get_all_records()
         for fila in datos:
-            if str(fila.get("Clave")).strip() == "Tasa_Dia":
-                try:
-                    return float(str(fila.get("Valor")).replace(",", "."))
-                except ValueError:
-                    return 40.80
+            if str(fila.get("Clave")).strip() == clave:
+                val = str(fila.get("Valor")).strip()
+                return val if val else valor_defecto
     except Exception:
         pass
-    return 40.80
+    return valor_defecto
 
-def guardar_nueva_tasa(nueva_tasa):
+def guardar_config_clave(clave, valor):
     try:
         ws = obtener_ws_config()
         filas = ws.get_all_values()
         
         fila_idx = None
         for idx, row in enumerate(filas):
-            if len(row) > 0 and row[0].strip() == "Tasa_Dia":
+            if len(row) > 0 and row[0].strip() == clave:
                 fila_idx = idx + 1
                 break
                 
         if fila_idx:
-            ws.update_cell(fila_idx, 2, str(round(nueva_tasa, 2)))
+            ws.update_cell(fila_idx, 2, str(valor))
         else:
-            ws.append_row(["Tasa_Dia", str(round(nueva_tasa, 2))])
+            ws.append_row([clave, str(valor)])
     except Exception as e:
-        st.error(f"Error guardando tasa en Google Sheets: {e}")
+        st.error(f"Error guardando configuración en Google Sheets: {e}")
 
 def obtener_tasa_actual():
     if "tasa_cambio" not in st.session_state or st.session_state.get("tasa_cambio") is None:
-        st.session_state["tasa_cambio"] = cargar_tasa_guardada()
+        val_str = cargar_config_guardada("Tasa_Dia", "40.80")
+        try:
+            st.session_state["tasa_cambio"] = float(val_str.replace(",", "."))
+        except ValueError:
+            st.session_state["tasa_cambio"] = 40.80
     try:
         return float(st.session_state["tasa_cambio"])
     except (ValueError, TypeError):
         st.session_state["tasa_cambio"] = 40.80
         return 40.80
 
+def obtener_telefono_dueno():
+    if "telefono_dueno" not in st.session_state:
+        st.session_state["telefono_dueno"] = cargar_config_guardada("Telefono_Dueno", "584120000000")
+    return st.session_state["telefono_dueno"]
+
 _ = obtener_tasa_actual()
+_ = obtener_telefono_dueno()
 
 # ---------------------------------------------------------
 # COLUMNAS OFICIALES Y UTILIDADES
@@ -104,6 +114,9 @@ def a_numero(val):
         return float(s)
     except ValueError:
         return 0.0
+
+def limpiar_telefono(tel):
+    return "".join([c for c in str(tel) if c.isdigit()])
 
 # ---------------------------------------------------------
 # CARGA Y REPARACIÓN AUTOMÁTICA DE TABLAS
@@ -238,26 +251,35 @@ if rol == "🔑 Administrador (Dueño)":
         st.sidebar.error("Clave incorrecta")
 
 tasa_actual = obtener_tasa_actual()
+tel_dueno = obtener_telefono_dueno()
 
 if es_admin:
     st.sidebar.markdown("---")
     st.sidebar.title("⚙️ Configuración Taller")
 
-    with st.sidebar.form("form_tasa"):
+    with st.sidebar.form("form_config"):
         tasa_input = st.number_input(
             "Tasa del Día (VES/USD):",
             value=tasa_actual,
             min_value=1.0, step=0.10, format="%.2f"
         )
-        btn_guardar_tasa = st.form_submit_button("💾 Guardar Tasa en Sheets")
+        tel_input = st.text_input(
+            "WhatsApp del Dueño (ej: 584121234567):",
+            value=tel_dueno
+        )
+        btn_guardar_cfg = st.form_submit_button("💾 Guardar Configuración")
 
-        if btn_guardar_tasa:
-            guardar_nueva_tasa(tasa_input)
+        if btn_guardar_cfg:
+            tel_limpio = limpiar_telefono(tel_input)
+            guardar_config_clave("Tasa_Dia", round(tasa_input, 2))
+            guardar_config_clave("Telefono_Dueno", tel_limpio)
+            
             st.session_state["tasa_cambio"] = tasa_input
-            st.sidebar.success(f"✅ Tasa guardada: {tasa_input:.2f} VES/USD")
+            st.session_state["telefono_dueno"] = tel_limpio
+            st.sidebar.success("✅ Configuración actualizada")
             st.rerun()
 
-    st.sidebar.info(f"📌 Tasa Activa: **{obtener_tasa_actual():.2f} VES/USD**")
+    st.sidebar.info(f"📌 **Tasa Activa:** {obtener_tasa_actual():.2f} VES/USD\n\n📲 **WhatsApp Dueño:** +{obtener_telefono_dueno()}")
 
 # ---------------------------------------------------------
 # INTERFAZ
@@ -268,6 +290,20 @@ def mostrar_formulario_produccion(es_modo_admin=False):
     st.subheader("Registrar Trabajo Realizado")
     t_actual = obtener_tasa_actual()
     
+    # Alerta de éxito + Botón directo de WhatsApp
+    if "wa_url_exito" in st.session_state and st.session_state["wa_url_exito"]:
+        st.success(f"✅ Trabajo registrado con éxito. ¡Envía el comprobante al dueño por WhatsApp!")
+        st.link_button(
+            "📲 CLICK AQUÍ PARA ENVIAR POR WHATSAPP AL DUEÑO",
+            st.session_state["wa_url_exito"],
+            type="primary",
+            use_container_width=True
+        )
+        if st.button("❌ Cerrar mensaje de WhatsApp"):
+            del st.session_state["wa_url_exito"]
+            st.rerun()
+        st.markdown("---")
+
     with st.form("form_prod", clear_on_submit=True):
         f1, f2, f3 = st.columns(3)
         orden = f1.text_input("N° Orden", value=f"#{len(df_prod)+101}")
@@ -319,7 +355,23 @@ def mostrar_formulario_produccion(es_modo_admin=False):
             ]
             
             ws_prod.append_row(nueva_fila, value_input_option="USER_ENTERED")
-            st.success("✅ Trabajo registrado correctamente (Queda pendiente por verificación).")
+            
+            # Construcción del mensaje formateado para WhatsApp
+            msg_wa = (
+                f"🏍️ *NUEVO TRABAJO REGISTRADO*\n\n"
+                f"📌 *Orden:* {orden}\n"
+                f"👤 *Mecánico:* {mecanico_p}\n"
+                f"🏍️ *Moto:* {moto}\n"
+                f"🛠️ *Trabajo:* {trabajo}\n"
+                f"💰 *Monto:* {monto_cobrado} {moneda_p}\n"
+                f"📅 *Fecha:* {fecha_p}\n"
+                f"⏳ *Estado:* Pendiente de aprobación"
+            )
+            msg_encoded = urllib.parse.quote(msg_wa)
+            num_dueno = obtener_telefono_dueno()
+            wa_url = f"https://api.whatsapp.com/send?phone={num_dueno}&text={msg_encoded}"
+            
+            st.session_state["wa_url_exito"] = wa_url
             st.rerun()
 
     # --- SECCIÓN DE VERIFICACIÓN PARA EL DUEÑO ---
