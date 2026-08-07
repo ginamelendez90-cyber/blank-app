@@ -5,7 +5,7 @@ import pandas as pd
 import datetime
 import unicodedata
 
-st.set_page_config(page_title="Control Taller - Google Sheets", page_icon="🏍️", layout="wide")
+st.set_page_config(page_title="CONTROL TALLER", page_icon="🏍️", layout="wide")
 
 # ---------------------------------------------------------
 # CONEXIÓN Y AUTENTICACIÓN
@@ -25,7 +25,7 @@ client = obtener_cliente_gspread()
 sheet = client.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
 # ---------------------------------------------------------
-# GESTIÓN DE LA TASA EN GOOGLE SHEETS (CONFIGURACIÓN)
+# GESTIÓN DE LA TASA EN GOOGLE SHEETS
 # ---------------------------------------------------------
 def obtener_ws_config():
     try:
@@ -132,7 +132,7 @@ ws_prod, df_prod = cargar_y_reparar_hoja("PRODUCCION", COLUMNAS_PROD)
 ws_vales, df_vales = cargar_y_reparar_hoja("VALES", COLUMNAS_VALES)
 
 # ---------------------------------------------------------
-# PROCESAMIENTO DINÁMICO Y CÁLCULO DE MONTOS
+# PROCESAMIENTO DINÁMICO
 # ---------------------------------------------------------
 if not df_prod.empty:
     df_prod["Monto_Cobrado_Num"] = df_prod["Monto_Cobrado"].apply(a_numero)
@@ -191,7 +191,6 @@ else:
     df_vales["Total_USD"] = 0.0
     df_vales["Mecanico_Clean"] = ""
 
-# Lista de Mecánicos Única
 mecanicos_defecto = ["Carlos Pérez", "Pedro Gómez", "Luis Rodríguez"]
 mecanicos_registrados = []
 if not df_prod.empty:
@@ -202,64 +201,52 @@ if not df_vales.empty:
 lista_mecanicos = sorted(list(set(mecanicos_defecto + [m for m in mecanicos_registrados if str(m).strip()])))
 
 # ---------------------------------------------------------
-# BARRA LATERAL CON PERSISTENCIA DE TASA
+# CONTROL DE ACCESO (ROLES Y CLAVE DE ADMIN)
 # ---------------------------------------------------------
-st.sidebar.title("⚙️ Configuración Taller")
+CLAVE_ADMIN = "1234"  # <--- Puedes cambiar esta clave si lo deseas
 
-with st.sidebar.form("form_tasa"):
-    tasa_input = st.number_input(
-        "Tasa del Día (VES/USD):",
-        value=float(st.session_state.tasa_cambio),
-        min_value=1.0, step=0.10, format="%.2f"
-    )
-    btn_guardar_tasa = st.form_submit_button("💾 Guardar Tasa en Sheets")
+st.sidebar.title("🔐 Acceso al Sistema")
+rol = st.sidebar.radio("Seleccionar Rol:", ["🛠️ Trabajadores (Mecánicos)", "🔑 Administrador (Dueño)"])
 
-    if btn_guardar_tasa:
-        guardar_nueva_tasa(tasa_input)
-        st.session_state.tasa_cambio = tasa_input
-        st.success(f"✅ Tasa guardada: {tasa_input:.2f} VES/USD")
-        st.rerun()
+es_admin = False
 
-st.sidebar.info(f"📌 Tasa Activa: **{st.session_state.tasa_cambio:.2f} VES/USD**")
+if rol == "🔑 Administrador (Dueño)":
+    clave_ingresada = st.sidebar.text_input("Clave de Administrador:", type="password")
+    if clave_ingresada == CLAVE_ADMIN:
+        es_admin = True
+        st.sidebar.success("Acceso concedido")
+    elif clave_ingresada != "":
+        st.sidebar.error("Clave incorrecta")
+
+# Ajuste de Tasa (Solo visible para el Administrador)
+if es_admin:
+    st.sidebar.markdown("---")
+    st.sidebar.title("⚙️ Configuración Taller")
+
+    with st.sidebar.form("form_tasa"):
+        tasa_input = st.number_input(
+            "Tasa del Día (VES/USD):",
+            value=float(st.session_state.tasa_cambio),
+            min_value=1.0, step=0.10, format="%.2f"
+        )
+        btn_guardar_tasa = st.form_submit_button("💾 Guardar Tasa en Sheets")
+
+        if btn_guardar_tasa:
+            guardar_nueva_tasa(tasa_input)
+            st.session_state.tasa_cambio = tasa_input
+            st.sidebar.success(f"✅ Tasa guardada: {tasa_input:.2f} VES/USD")
+            st.rerun()
+
+    st.sidebar.info(f"📌 Tasa Activa: **{st.session_state.tasa_cambio:.2f} VES/USD**")
 
 # ---------------------------------------------------------
-# PANEL PRINCIPAL
+# INTERFAZ SEGÚN EL ROL
 # ---------------------------------------------------------
 st.title("🏍️ Control de Taller")
 
-tab_dash, tab_prod, tab_vales, tab_liq = st.tabs(["📊 Dashboard", "🛠️ Producción", "💵 Vales", "🧮 Liquidación"])
-
-# ---------------------------------------------------------
-# TAB 1: DASHBOARD
-# ---------------------------------------------------------
-with tab_dash:
-    total_mo = df_prod["Mano_Obra_USD"].sum() if not df_prod.empty else 0.0
-    total_com = df_prod["Ganancia_USD"].sum() if not df_prod.empty else 0.0
-    ganancia_dueno = total_mo - total_com  # Margen que le queda al taller
-    total_val = df_vales["Total_USD"].sum() if not df_vales.empty else 0.0
-    neto_pagar = total_com - total_val
-    
-    st.subheader("📊 Ingresos y Ganancias del Taller")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Facturado Total (Mano de Obra)", f"${total_mo:.2f}")
-    c2.metric(
-        "🏢 Ganancia del Dueño / Taller", 
-        f"${ganancia_dueno:.2f}", 
-        delta=f"{(ganancia_dueno/total_mo*100):.1f}% de M.O" if total_mo > 0 else None
-    )
-    c3.metric("🔧 Comisiones Mecánicos", f"${total_com:.2f}")
-
-    st.markdown("---")
-    st.subheader("💵 Balance y Liquidación de Mecánicos")
-    c4, c5 = st.columns(2)
-    c4.metric("Vales Entregados", f"${total_val:.2f}")
-    c5.metric("Neto Pendiente por Pagar", f"${neto_pagar:.2f}")
-
-# ---------------------------------------------------------
-# TAB 2: PRODUCCIÓN
-# ---------------------------------------------------------
-with tab_prod:
-    st.subheader("Registrar Nuevo Trabajo")
+# FUNCION COMPARTIDA: FORMULARIO DE REGISTRO DE PRODUCCION
+def mostrar_formulario_produccion(es_modo_admin=False):
+    st.subheader("Registrar Trabajo Realizado")
     
     with st.form("form_prod", clear_on_submit=True):
         f1, f2, f3 = st.columns(3)
@@ -272,11 +259,20 @@ with tab_prod:
         trabajo = f5.text_input("Trabajo Realizado", placeholder="Ej: Mantenimiento General")
         
         st.markdown("---")
-        c_mon, c_monto, c_tasa, c_com = st.columns(4)
-        moneda_p = c_mon.selectbox("Moneda de Cobro", ["USD", "VES"])
-        monto_cobrado = c_monto.number_input("Monto Mano de Obra", min_value=0.0, step=5.0)
-        tasa_p = c_tasa.number_input("Tasa Aplicada (VES/USD)", value=float(st.session_state.tasa_cambio))
-        comision_pct = c_com.slider("% Comisión Mecánico", min_value=0, max_value=100, value=50)
+        
+        if es_modo_admin:
+            c_mon, c_monto, c_tasa, c_com = st.columns(4)
+            moneda_p = c_mon.selectbox("Moneda de Cobro", ["USD", "VES"])
+            monto_cobrado = c_monto.number_input("Monto Mano de Obra", min_value=0.0, step=5.0)
+            tasa_p = c_tasa.number_input("Tasa Aplicada (VES/USD)", value=float(st.session_state.tasa_cambio))
+            comision_pct = c_com.slider("% Comisión Mecánico", min_value=0, max_value=100, value=50)
+        else:
+            # En modo trabajador, la tasa y el % de comisión se calculan en segundo plano automáticamente
+            c_mon, c_monto = st.columns(2)
+            moneda_p = c_mon.selectbox("Moneda de Cobro", ["USD", "VES"])
+            monto_cobrado = c_monto.number_input("Monto Mano de Obra", min_value=0.0, step=5.0)
+            tasa_p = float(st.session_state.tasa_cambio)
+            comision_pct = 50  # Comisión por defecto para el cálculo interno
         
         btn_prod = st.form_submit_button("💾 Guardar Trabajo")
         
@@ -303,89 +299,126 @@ with tab_prod:
             ]
             
             ws_prod.append_row(nueva_fila, value_input_option="USER_ENTERED")
-            st.success("✅ Trabajo guardado con éxito en Google Sheets.")
+            st.success("✅ Trabajo registrado correctamente.")
             st.rerun()
 
     st.markdown("---")
-    st.subheader("Histórico de Producción")
-    cols_mostrar_prod = [c for c in COLUMNAS_PROD if c in df_prod.columns]
-    st.dataframe(df_prod[cols_mostrar_prod], use_container_width=True, hide_index=True)
-
-# ---------------------------------------------------------
-# TAB 3: VALES
-# ---------------------------------------------------------
-with tab_vales:
-    st.subheader("Registrar Vale")
+    st.subheader("Registro de Trabajos")
     
-    with st.form("form_vales", clear_on_submit=True):
-        v1, v2, v3 = st.columns(3)
-        num_vale = v1.text_input("N° Vale", value=f"V-0{len(df_vales)+1}")
-        fecha_v = v2.date_input("Fecha Vale", datetime.date.today())
-        mecanico_v = v3.selectbox("Mecánico ", lista_mecanicos)
+    # Si es trabajador, se ocultan columnas sensibles como la ganancia final en USD o % comisión
+    if es_modo_admin:
+        cols_mostrar = [c for c in COLUMNAS_PROD if c in df_prod.columns]
+    else:
+        cols_mostrar = ["Orden", "Fecha", "Mecanico", "Moto", "Trabajo", "Moneda", "Monto_Cobrado"]
         
-        v4, v5, v6, v7 = st.columns(4)
-        concepto = v4.text_input("Concepto", placeholder="Ej: Pasajes / Adelanto")
-        monto = v5.number_input("Monto Entregado", min_value=0.0, step=5.0)
-        moneda = v6.selectbox("Moneda", ["USD", "VES"])
-        tasa_v = v7.number_input("Tasa Aplicada", value=float(st.session_state.tasa_cambio))
-        forma_pago = st.selectbox("Forma Pago", ["Efectivo USD", "Efectivo VES", "Pago Móvil", "Transferencia"])
-        
-        btn_vale = st.form_submit_button("💵 Entregar Vale")
-        
-        if btn_vale:
-            total_usd = monto if moneda == "USD" else (monto / tasa_v if tasa_v > 0 else 0.0)
-            nuevo_vale = [
-                num_vale,
-                str(fecha_v),
-                mecanico_v,
-                concepto,
-                str(monto),
-                moneda,
-                str(tasa_v),
-                str(round(total_usd, 2)),
-                forma_pago
-            ]
-            ws_vales.append_row(nuevo_vale, value_input_option="USER_ENTERED")
-            st.success("✅ Vale registrado en Google Sheets.")
-            st.rerun()
+    st.dataframe(df_prod[cols_mostrar], use_container_width=True, hide_index=True)
 
-    st.markdown("---")
-    cols_mostrar_vales = [c for c in COLUMNAS_VALES if c in df_vales.columns]
-    st.dataframe(df_vales[cols_mostrar_vales], use_container_width=True, hide_index=True)
 
-# ---------------------------------------------------------
-# TAB 4: LIQUIDACIÓN
-# ---------------------------------------------------------
-with tab_liq:
-    st.subheader("🧮 Liquidación Calculada")
-    
-    liq_rows = []
-    for m in lista_mecanicos:
-        m_norm = quitar_acentos_y_espacios(m)
+# RENDERIZADO POR ROL
+if not es_admin:
+    # VISTA TRABAJADOR
+    st.info("💡 Modo Trabajador: Registra tus trabajos diarios. No tienes acceso a funciones administrativas.")
+    mostrar_formulario_produccion(es_modo_admin=False)
+
+else:
+    # VISTA ADMINISTRADOR COMPLETA CON TODAS LAS PESTAÑAS
+    tab_dash, tab_prod, tab_vales, tab_liq = st.tabs(["📊 Dashboard", "🛠️ Producción", "💵 Vales", "🧮 Liquidación"])
+
+    with tab_dash:
+        total_mo = df_prod["Mano_Obra_USD"].sum() if not df_prod.empty else 0.0
+        total_com = df_prod["Ganancia_USD"].sum() if not df_prod.empty else 0.0
+        ganancia_dueno = total_mo - total_com
+        total_val = df_vales["Total_USD"].sum() if not df_vales.empty else 0.0
+        neto_pagar = total_com - total_val
         
-        if not df_prod.empty and "Mecanico_Clean" in df_prod.columns:
-            total_fact = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Mano_Obra_USD"].sum()
-            gen = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Ganancia_USD"].sum()
-        else:
-            total_fact = 0.0
-            gen = 0.0
+        st.subheader("📊 Ingresos y Ganancias del Taller")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Facturado Total (Mano de Obra)", f"${total_mo:.2f}")
+        c2.metric(
+            "🏢 Ganancia del Dueño / Taller", 
+            f"${ganancia_dueno:.2f}", 
+            delta=f"{(ganancia_dueno/total_mo*100):.1f}% de M.O" if total_mo > 0 else None
+        )
+        c3.metric("🔧 Comisiones Mecánicos", f"${total_com:.2f}")
+
+        st.markdown("---")
+        st.subheader("💵 Balance y Liquidación de Mecánicos")
+        c4, c5 = st.columns(2)
+        c4.metric("Vales Entregados", f"${total_val:.2f}")
+        c5.metric("Neto Pendiente por Pagar", f"${neto_pagar:.2f}")
+
+    with tab_prod:
+        mostrar_formulario_produccion(es_modo_admin=True)
+
+    with tab_vales:
+        st.subheader("Registrar Vale")
+        
+        with st.form("form_vales", clear_on_submit=True):
+            v1, v2, v3 = st.columns(3)
+            num_vale = v1.text_input("N° Vale", value=f"V-0{len(df_vales)+1}")
+            fecha_v = v2.date_input("Fecha Vale", datetime.date.today())
+            mecanico_v = v3.selectbox("Mecánico ", lista_mecanicos)
             
-        if not df_vales.empty and "Mecanico_Clean" in df_vales.columns:
-            val = df_vales[df_vales["Mecanico_Clean"] == m_norm]["Total_USD"].sum()
-        else:
-            val = 0.0
+            v4, v5, v6, v7 = st.columns(4)
+            concepto = v4.text_input("Concepto", placeholder="Ej: Pasajes / Adelanto")
+            monto = v5.number_input("Monto Entregado", min_value=0.0, step=5.0)
+            moneda = v6.selectbox("Moneda", ["USD", "VES"])
+            tasa_v = v7.number_input("Tasa Aplicada", value=float(st.session_state.tasa_cambio))
+            forma_pago = st.selectbox("Forma Pago", ["Efectivo USD", "Efectivo VES", "Pago Móvil", "Transferencia"])
             
-        neto = gen - val
-        neto_ves = neto * st.session_state.tasa_cambio
+            btn_vale = st.form_submit_button("💵 Entregar Vale")
+            
+            if btn_vale:
+                total_usd = monto if moneda == "USD" else (monto / tasa_v if tasa_v > 0 else 0.0)
+                nuevo_vale = [
+                    num_vale,
+                    str(fecha_v),
+                    mecanico_v,
+                    concepto,
+                    str(monto),
+                    moneda,
+                    str(tasa_v),
+                    str(round(total_usd, 2)),
+                    forma_pago
+                ]
+                ws_vales.append_row(nuevo_vale, value_input_option="USER_ENTERED")
+                st.success("✅ Vale registrado en Google Sheets.")
+                st.rerun()
+
+        st.markdown("---")
+        cols_mostrar_vales = [c for c in COLUMNAS_VALES if c in df_vales.columns]
+        st.dataframe(df_vales[cols_mostrar_vales], use_container_width=True, hide_index=True)
+
+    with tab_liq:
+        st.subheader("🧮 Liquidación Calculada")
         
-        liq_rows.append({
-            "Mecánico": m,
-            "Facturado Total ($)": round(total_fact, 2),
-            "Ganancia Comisión ($)": round(gen, 2),
-            "Total Vales ($)": round(val, 2),
-            "Saldo Neto ($)": round(neto, 2),
-            "Saldo Neto (VES)": round(neto_ves, 2)
-        })
-    
-    df_liq = pd.DataFrame(liq_rows)
-    st.dataframe(df_liq, use_container_width=True, hide_index=True)
+        liq_rows = []
+        for m in lista_mecanicos:
+            m_norm = quitar_acentos_y_espacios(m)
+            
+            if not df_prod.empty and "Mecanico_Clean" in df_prod.columns:
+                total_fact = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Mano_Obra_USD"].sum()
+                gen = df_prod[df_prod["Mecanico_Clean"] == m_norm]["Ganancia_USD"].sum()
+            else:
+                total_fact = 0.0
+                gen = 0.0
+                
+            if not df_vales.empty and "Mecanico_Clean" in df_vales.columns:
+                val = df_vales[df_vales["Mecanico_Clean"] == m_norm]["Total_USD"].sum()
+            else:
+                val = 0.0
+                
+            neto = gen - val
+            neto_ves = neto * st.session_state.tasa_cambio
+            
+            liq_rows.append({
+                "Mecánico": m,
+                "Facturado Total ($)": round(total_fact, 2),
+                "Ganancia Comisión ($)": round(gen, 2),
+                "Total Vales ($)": round(val, 2),
+                "Saldo Neto ($)": round(neto, 2),
+                "Saldo Neto (VES)": round(neto_ves, 2)
+            })
+        
+        df_liq = pd.DataFrame(liq_rows)
+        st.dataframe(df_liq, use_container_width=True, hide_index=True)
