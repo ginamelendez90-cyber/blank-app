@@ -416,7 +416,7 @@ else:
             saldo_ves = gan_ves - vales_ves
             
             liq_rows.append({
-                "Mecánico": m,
+                "Mecanico": m,  # Nombre estandarizado sin acento en clave interna
                 "Comisión USD ($)": round(gan_usd, 2),
                 "Vales USD ($)": round(vales_usd, 2),
                 "PAGO EN USD ($)": round(saldo_usd, 2),
@@ -428,8 +428,8 @@ else:
         df_liq = pd.DataFrame(liq_rows)
         
         # Totales globales
-        tot_usd_pagar = df_liq["PAGO EN USD ($)"].sum()
-        tot_ves_pagar = df_liq["PAGO EN VES (Bs)"].sum()
+        tot_usd_pagar = df_liq["PAGO EN USD ($)"].sum() if not df_liq.empty else 0.0
+        tot_ves_pagar = df_liq["PAGO EN VES (Bs)"].sum() if not df_liq.empty else 0.0
         
         m1, m2, m3 = st.columns(3)
         m1.metric("💵 Total Pendiente a Pagar en Dólares", f"${tot_usd_pagar:.2f}")
@@ -438,7 +438,10 @@ else:
         
         st.markdown("---")
         st.subheader("📋 Tabla General de Liquidación")
-        st.dataframe(df_liq, use_container_width=True, hide_index=True)
+        
+        # Renombramos la columna al mostrarla en pantalla
+        df_liq_display = df_liq.rename(columns={"Mecanico": "Mecánico"})
+        st.dataframe(df_liq_display, use_container_width=True, hide_index=True)
         
         st.markdown("---")
         st.subheader("🧾 Recibo de Pago por Mecánico")
@@ -460,7 +463,6 @@ else:
                 st.success(f"### 🇻🇪 Pago en Bolívares: **{p_ves:,.2f} Bs**")
                 st.caption(f"Comisiones: {fila_mec['Comisión VES (Bs)'].values[0]:,.2f} Bs - Vales: {fila_mec['Vales VES (Bs)'].values[0]:,.2f} Bs")
 
-            # Conversión opcional
             if p_ves > 0 or p_usd > 0:
                 with st.expander("🔄 Ver conversión unificada de moneda"):
                     total_todo_usd = p_usd + (p_ves / tasa_actual if tasa_actual > 0 else 0.0)
