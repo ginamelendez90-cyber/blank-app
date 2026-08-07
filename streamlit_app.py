@@ -32,7 +32,7 @@ def obtener_ws_mecanicos():
     try:
         ws = sheet.worksheet("MECANICOS")
     except gspread.exceptions.WorksheetNotFound:
-        ws = sheet.add_worksheet(title="MECANICOS", rows="20", cols="1")
+        ws = sheet.add_worksheet(title="MECANICOS", rows=50, cols=2)
         ws.append_row(["Nombre"])
         ws.append_rows([["Carlos Pérez"], ["Pedro Gómez"], ["Luis Rodríguez"]])
     return ws
@@ -80,7 +80,7 @@ def obtener_ws_config():
     try:
         ws = sheet.worksheet("CONFIGURACION")
     except gspread.exceptions.WorksheetNotFound:
-        ws = sheet.add_worksheet(title="CONFIGURACION", rows="10", cols="2")
+        ws = sheet.add_worksheet(title="CONFIGURACION", rows=10, cols=2)
         ws.append_row(["Clave", "Valor"])
         ws.append_row(["Tasa_Dia", "40.80"])
         ws.append_row(["Telefono_Dueno", "584120000000"])
@@ -174,9 +174,12 @@ def limpiar_telefono(tel):
 def cargar_y_reparar_hoja(nombre_hoja, columnas_oficiales):
     try:
         ws = sheet.worksheet(nombre_hoja)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sheet.add_worksheet(title=nombre_hoja, rows="100", cols=str(len(columnas_oficiales)))
-        ws.append_row(columnas_oficiales)
+    except Exception:
+        try:
+            ws = sheet.add_worksheet(title=nombre_hoja, rows=100, cols=len(columnas_oficiales))
+            ws.append_row(columnas_oficiales)
+        except Exception:
+            ws = sheet.worksheet(nombre_hoja)
 
     filas = ws.get_all_values()
 
@@ -188,7 +191,7 @@ def cargar_y_reparar_hoja(nombre_hoja, columnas_oficiales):
     
     if len(encabezados_actuales) != len(columnas_oficiales) or encabezados_actuales != columnas_oficiales:
         try:
-            ws.update([columnas_oficiales], 'A1')
+            ws.update(range_name='A1', values=[columnas_oficiales])
         except Exception:
             pass
 
@@ -365,21 +368,18 @@ def procesar_liquidacion_mecanico(mecanico, gan_usd, vales_usd, pago_usd, gan_ve
     col_est_prod = COLUMNAS_PROD.index("Estado") + 1
     col_est_vales = COLUMNAS_VALES.index("Estado") + 1
     
-    # 1. Marcar producciones como Liquidadas
     if not df_prod.empty:
         for idx, r in df_prod.iterrows():
             if r["Mecanico_Clean"] == m_norm and str(r["Estado"]).strip() != "🔒 Liquidado":
                 row_sheet = idx + 2
                 ws_prod.update_cell(row_sheet, col_est_prod, "🔒 Liquidado")
                 
-    # 2. Marcar vales como Liquidados
     if not df_vales.empty:
         for idx, r in df_vales.iterrows():
             if r["Mecanico_Clean"] == m_norm and str(r["Estado"]).strip() != "🔒 Liquidado":
                 row_sheet = idx + 2
                 ws_vales.update_cell(row_sheet, col_est_vales, "🔒 Liquidado")
                 
-    # 3. Registrar en la tabla CIERRES
     id_cierre = f"C-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
     fecha_cierre = str(datetime.date.today())
     
@@ -545,7 +545,6 @@ else:
     ])
 
     with tab_dash:
-        # Filtrar solo lo activo (No liquidado)
         df_prod_activa = df_prod[df_prod["Estado"] != "🔒 Liquidado"] if not df_prod.empty else pd.DataFrame()
         df_vales_activa = df_vales[df_vales["Estado"] != "🔒 Liquidado"] if not df_vales.empty else pd.DataFrame()
 
@@ -615,13 +614,9 @@ else:
         cols_mostrar_vales = [c for c in COLUMNAS_VALES if c in df_vales.columns]
         st.dataframe(df_vales[cols_mostrar_vales], use_container_width=True, hide_index=True)
 
-    # ---------------------------------------------------------
-    # TAB LIQUIDACIÓN Y CIERRE SEMANAL
-    # ---------------------------------------------------------
     with tab_liq:
         st.subheader("🧮 Resumen de Liquidación Pendiente (Semana Activa)")
         
-        # Filtramos solo registros NO liquidados
         df_prod_pend = df_prod[df_prod["Estado"] != "🔒 Liquidado"] if not df_prod.empty else pd.DataFrame()
         df_vales_pend = df_vales[df_vales["Estado"] != "🔒 Liquidado"] if not df_vales.empty else pd.DataFrame()
         
@@ -679,7 +674,6 @@ else:
         
         st.markdown("---")
         
-        # --- BOTÓN DE CIERRE GLOBAL ---
         col_cierre_gen, _ = st.columns([2, 2])
         with col_cierre_gen:
             if st.button("🔒 PROCESAR CIERRE SEMANAL GENERAL (LIQUIDAR A TODOS)", type="primary", use_container_width=True):
@@ -697,7 +691,7 @@ else:
                             tasa=tasa_actual
                         )
                 st.balloons()
-                st.success("🎉 ¡Cierre semanal general completado con éxito! Se han reseteado los saldos para la nueva semana.")
+                st.success("🎉 ¡Cierre semanal general completado con éxito!")
                 st.rerun()
 
         st.markdown("---")
@@ -746,9 +740,6 @@ else:
                     st.success(f"✅ Se ha completado la liquidación de {mec_sel}.")
                     st.rerun()
 
-    # ---------------------------------------------------------
-    # TAB HISTORIAL DE CIERRES
-    # ---------------------------------------------------------
     with tab_hist_cierres:
         st.subheader("🔒 Historial de Cierres Semanales")
         
