@@ -212,12 +212,13 @@ ws_vales, df_vales = cargar_y_reparar_hoja("VALES", COLUMNAS_VALES)
 ws_cierres, df_cierres = cargar_y_reparar_hoja("CIERRES", COLUMNAS_CIERRES)
 
 # ---------------------------------------------------------
-# PROCESAMIENTO DINÁMICO DE PRODUCCIÓN Y VALES
+# PROCESAMIENTO CONGELADO (AISLAMIENTO DE TASA POR REGISTRO)
 # ---------------------------------------------------------
 if not df_prod.empty:
     df_prod["Monto_Cobrado_Num"] = df_prod["Monto_Cobrado"].apply(a_numero)
     df_prod["Tasa_Num"] = df_prod["Tasa"].apply(a_numero)
     df_prod["Mano_Obra_USD_Existente"] = df_prod["Mano_Obra_USD"].apply(a_numero)
+    df_prod["Ganancia_USD_Existente"] = df_prod["Ganancia_USD"].apply(a_numero)
     df_prod["Comision_Pct_Num"] = df_prod["Comision_Pct"].apply(a_numero)
     
     if "Estado" not in df_prod.columns:
@@ -225,23 +226,25 @@ if not df_prod.empty:
     df_prod["Estado"] = df_prod["Estado"].apply(lambda x: x if str(x).strip() else "⏳ Pendiente")
 
     def calcular_mo_usd(row):
+        # Si la fila ya tiene un valor en USD previamente guardado en Google Sheets, SE RESPETA
+        if row["Mano_Obra_USD_Existente"] > 0:
+            return round(row["Mano_Obra_USD_Existente"], 2)
+        
         moneda = str(row["Moneda"]).upper().strip()
         monto = row["Monto_Cobrado_Num"]
-        tasa = row["Tasa_Num"]
-        mo_exist = row["Mano_Obra_USD_Existente"]
+        tasa = row["Tasa_Num"] # Usa la tasa registrada EN ESA FILA
         
         if moneda == "VES" and tasa > 0 and monto > 0:
             return round(monto / tasa, 2)
-        elif moneda == "USD" and monto > 0:
-            return round(monto, 2)
-        elif monto > 0:
-            return round(monto, 2)
-        elif mo_exist > 0:
-            return round(mo_exist, 2)
-        return 0.0
+        return round(monto, 2)
+
+    def calcular_ganancia_usd(row):
+        if row["Ganancia_USD_Existente"] > 0:
+            return round(row["Ganancia_USD_Existente"], 2)
+        return round(row["Mano_Obra_USD"] * (row["Comision_Pct_Num"] / 100.0), 2)
 
     df_prod["Mano_Obra_USD"] = df_prod.apply(calcular_mo_usd, axis=1)
-    df_prod["Ganancia_USD"] = df_prod.apply(lambda r: round(r["Mano_Obra_USD"] * (r["Comision_Pct_Num"] / 100.0), 2), axis=1)
+    df_prod["Ganancia_USD"] = df_prod.apply(calcular_ganancia_usd, axis=1)
     df_prod["Mecanico_Clean"] = df_prod["Mecanico"].apply(quitar_acentos_y_espacios)
 else:
     df_prod["Mano_Obra_USD"] = 0.0
@@ -259,20 +262,17 @@ if not df_vales.empty:
     df_vales["Estado"] = df_vales["Estado"].apply(lambda x: x if str(x).strip() else "⏳ Pendiente")
 
     def calcular_vale_usd(row):
+        # Si la fila ya tiene un valor guardado en USD, SE RESPETA
+        if row["Total_USD_Existente"] > 0:
+            return round(row["Total_USD_Existente"], 2)
+
         moneda = str(row["Moneda"]).upper().strip()
         monto = row["Monto_Num"]
-        tasa = row["Tasa_Num"]
-        val_exist = row["Total_USD_Existente"]
+        tasa = row["Tasa_Num"] # Usa la tasa registrada EN ESA FILA
 
         if moneda == "VES" and tasa > 0 and monto > 0:
             return round(monto / tasa, 2)
-        elif moneda == "USD" and monto > 0:
-            return round(monto, 2)
-        elif monto > 0:
-            return round(monto, 2)
-        elif val_exist > 0:
-            return round(val_exist, 2)
-        return 0.0
+        return round(monto, 2)
 
     df_vales["Total_USD"] = df_vales.apply(calcular_vale_usd, axis=1)
     df_vales["Mecanico_Clean"] = df_vales["Mecanico"].apply(quitar_acentos_y_espacios)
@@ -325,7 +325,7 @@ if es_admin:
             
             st.session_state["tasa_cambio"] = tasa_input
             st.session_state["telefono_dueno"] = tel_limpio
-            st.sidebar.success("✅ Configuración actualizada")
+            st.sidebar.success("✅ Configuración actualizada (Aplica solo a nuevos registros)")
             st.rerun()
 
     st.sidebar.markdown("---")
@@ -358,7 +358,7 @@ if es_admin:
         else:
             st.info("No hay mecánicos registrados.")
 
-    st.sidebar.info(f"📌 **Tasa Activa:** {obtener_tasa_actual():.2f} VES/USD\n\n📲 **WhatsApp Dueño:** +{obtener_telefono_dueno()}")
+    st.sidebar.info(f"📌 **Tasa Activa del Día:** {obtener_tasa_actual():.2f} VES/USD\n\n📲 **WhatsApp Dueño:** +{obtener_telefono_dueno()}")
 
 # ---------------------------------------------------------
 # FUNCIONES AUXILIARES PARA CIERRES
@@ -512,7 +512,7 @@ def mostrar_formulario_produccion(es_modo_admin=False):
                     col_info, col_act = st.columns([4, 1])
                     with col_info:
                         st.write(f"**Orden:** {row['Orden']} | **Fecha:** {row['Fecha']} | **Mecánico:** {row['Mecanico']}")
-                        st.caption(f"🏍️ **Moto:** {row['Moto']} | 🛠️ **Trabajo:** {row['Trabajo']} | 💰 **Monto:** {row['Monto_Cobrado']} {row['Moneda']}")
+                        st.caption(f"🏍️ **Moto:** {row['Moto']} | 🛠️ **Trabajo:** {row['Trabajo']} | 💰 **Monto:** {row['Monto_Cobrado']} {row['Moneda']} | 📌 **Tasa:** {row['Tasa']}")
                     with col_act:
                         if st.button("✅ Aprobar", key=f"v_btn_{idx}_{row['Orden']}"):
                             col_estado_idx = COLUMNAS_PROD.index("Estado") + 1
@@ -530,7 +530,7 @@ def mostrar_formulario_produccion(es_modo_admin=False):
     if es_modo_admin:
         cols_mostrar = [c for c in COLUMNAS_PROD if c in df_prod.columns]
     else:
-        cols_mostrar = ["Orden", "Fecha", "Mecanico", "Moto", "Trabajo", "Moneda", "Monto_Cobrado", "Estado"]
+        cols_mostrar = ["Orden", "Fecha", "Mecanico", "Moto", "Trabajo", "Moneda", "Monto_Cobrado", "Tasa", "Estado"]
         
     st.dataframe(df_prod[cols_mostrar], use_container_width=True, hide_index=True)
 
@@ -556,19 +556,19 @@ else:
         
         st.subheader("📊 Resumen de Semana Activa (Sin Liquidar)")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Facturado Total (Mano de Obra)", f"${total_mo:.2f}")
+        c1.metric("Facturado Total (Mano de Obra USD)", f"${total_mo:.2f}")
         c2.metric(
             "🏢 Ganancia del Dueño / Taller", 
             f"${ganancia_dueno:.2f}", 
             delta=f"{(ganancia_dueno/total_mo*100):.1f}% de M.O" if total_mo > 0 else None
         )
-        c3.metric("🔧 Comisiones Mecánicos", f"${total_com:.2f}")
+        c3.metric("🔧 Comisiones Mecánicos USD", f"${total_com:.2f}")
 
         st.markdown("---")
         st.subheader("💵 Balance de Mecánicos Pendiente")
         c4, c5 = st.columns(2)
-        c4.metric("Vales Entregados", f"${total_val:.2f}")
-        c5.metric("Neto Pendiente por Pagar", f"${neto_pagar:.2f}")
+        c4.metric("Vales Entregados (USD)", f"${total_val:.2f}")
+        c5.metric("Neto Pendiente por Pagar (USD)", f"${neto_pagar:.2f}")
 
     with tab_prod:
         mostrar_formulario_produccion(es_modo_admin=True)
@@ -628,25 +628,24 @@ else:
             
             if not df_prod_pend.empty and "Mecanico_Clean" in df_prod_pend.columns:
                 df_m_prod = df_prod_pend[df_prod_pend["Mecanico_Clean"] == m_norm]
-                prod_usd = df_m_prod[df_m_prod["Moneda"].astype(str).str.upper().str.strip() == "USD"]
-                gan_usd = prod_usd["Ganancia_USD"].sum()
-                
-                prod_ves = df_m_prod[df_m_prod["Moneda"].astype(str).str.upper().str.strip() == "VES"]
-                gan_ves = (prod_ves["Monto_Cobrado_Num"] * (prod_ves["Comision_Pct_Num"] / 100.0)).sum()
+                # Suma acumulada en USD calculada individualmente según la tasa de cada día
+                gan_usd = df_m_prod["Ganancia_USD"].sum()
             else:
                 gan_usd = 0.0
-                gan_ves = 0.0
                 
             if not df_vales_pend.empty and "Mecanico_Clean" in df_vales_pend.columns:
                 df_m_vales = df_vales_pend[df_vales_pend["Mecanico_Clean"] == m_norm]
-                vales_usd = df_m_vales[df_m_vales["Moneda"].astype(str).str.upper().str.strip() == "USD"]["Monto_Num"].sum()
-                vales_ves = df_m_vales[df_m_vales["Moneda"].astype(str).str.upper().str.strip() == "VES"]["Monto_Num"].sum()
+                # Suma acumulada de vales en USD calculada individualmente con la tasa de su fecha
+                vales_usd = df_m_vales["Total_USD"].sum()
             else:
                 vales_usd = 0.0
-                vales_ves = 0.0
                 
             saldo_usd = gan_usd - vales_usd
-            saldo_ves = gan_ves - vales_ves
+            
+            # Conversión al momento del pago del saldo acumulado a la tasa activa del día
+            gan_ves = gan_usd * tasa_actual
+            vales_ves = vales_usd * tasa_actual
+            saldo_ves = saldo_usd * tasa_actual
             
             liq_rows.append({
                 "Mecanico": m,
@@ -666,7 +665,7 @@ else:
         m1, m2, m3 = st.columns(3)
         m1.metric("💵 Total Pendiente a Pagar en Dólares", f"${tot_usd_pagar:.2f}")
         m2.metric("🇻🇪 Total Pendiente a Pagar en Bolívares", f"{tot_ves_pagar:,.2f} Bs")
-        m3.metric("📌 Tasa de Cambio Activa", f"{tasa_actual:.2f} VES/USD")
+        m3.metric("📌 Tasa Activa para Cierre Hoy", f"{tasa_actual:.2f} VES/USD")
         
         st.markdown("---")
         st.subheader("📋 Tabla General de Cierre Semanal")
