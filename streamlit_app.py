@@ -13,10 +13,19 @@ st.set_page_config(page_title="Control de Taller - Trabajos y Liquidación", lay
 
 @st.cache_resource
 def get_gspread_client():
-    """Autentica y devuelve el cliente de gspread."""
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    """Autentica y devuelve el cliente de gspread usando connections.gsheets."""
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    # Extrae las credenciales desde connections.gsheets
+    creds_dict = dict(st.secrets["connections"]["gsheets"])
+    
+    # Se remueve la URL de la hoja para dejar solo las claves de la cuenta de servicio
+    creds_dict.pop("spreadsheet", None)
+    
     credentials = Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
+        creds_dict,
         scopes=scopes,
     )
     return gspread.authorize(credentials)
@@ -47,7 +56,7 @@ def cambiar_estado_trabajo(row_index, nuevo_estado):
     """Actualiza la columna 'Estado' de una fila en la hoja Trabajos."""
     sheet = get_spreadsheet()
     worksheet = sheet.worksheet("Trabajos")
-    # En gspread las filas empiezan en 1. Sumamos 2 por el encabezado.
+    # En gspread las filas empiezan en 1. Sumamos 2 por la fila de encabezados.
     worksheet.update_cell(row_index + 2, 5, nuevo_estado)  # Columna 5 = Estado
     st.cache_data.clear()  # Limpiar caché para refrescar pantalla
     st.rerun()
@@ -103,7 +112,10 @@ with tab_aprobar:
                     col1.write(f"**Fecha:** {row.get('Fecha', '')}")
                     col2.write(f"**Trabajador:** {row.get('Trabajador', '')}")
                     col3.write(f"**Trabajo:** {row.get('Descripcion', '')}")
-                    col4.write(f"**Monto:** ${row.get('Monto', 0):,.2f}")
+                    
+                    # Formateo de monto
+                    monto_val = pd.to_numeric(row.get('Monto', 0), errors='coerce') or 0.0
+                    col4.write(f"**Monto:** ${monto_val:,.2f}")
                     
                     # Botones de acción para cada trabajo
                     col_btn1, col_btn2 = col5.columns(2)
@@ -113,7 +125,7 @@ with tab_aprobar:
                         cambiar_estado_trabajo(index, "Rechazado")
                     st.divider()
     else:
-        st.warning("No hay registros o la estructura de la hoja no es correcta.")
+        st.warning("No hay registros o la pestaña 'Trabajos' no contiene la columna 'Estado'.")
 
 # ------------------------------------------
 # TAB 2: REGISTRO DE TRABAJOS Y ADELANTOS
@@ -170,15 +182,14 @@ with tab_liquidacion:
     if not df_adelantos.empty and "Trabajador" in df_adelantos.columns:
         lista_trabajadores.extend(df_adelantos["Trabajador"].dropna().unique().tolist())
     
-    lista_trabajadores = sorted(list(set(lista_trabajadores)))
+    lista_trabajadores = sorted(list(set([str(t).strip() for t in lista_trabajadores if str(t).strip() != ""])))
     
     if not lista_trabajadores:
         st.info("No hay registros de trabajadores aún.")
     else:
         filtro_trabajador = st.selectbox("Seleccionar Trabajador:", ["Todos"] + lista_trabajadores)
         
-        # FILTRADO DE DATOS
-        # ⚠️ AQUÍ ESTÁ LA REGLA CLAVE: Solo tomamos trabajos con Estado == 'Aprobado'
+        # REGLA CLAVE: Solo se suman trabajos con Estado == 'Aprobado'
         trabajadores_evaluar = lista_trabajadores if filtro_trabajador == "Todos" else [filtro_trabajador]
         
         resumen_data = []
@@ -191,13 +202,15 @@ with tab_liquidacion:
                     (df_trabajos["Trabajador"] == emp) & 
                     (df_trabajos["Estado"] == "Aprobado")
                 ]
-                monto_generado_aprobado = aprobados_emp["Monto"].sum() if not aprobados_emp.empty else 0.0
+                if not aprobados_emp.empty:
+                    monto_generado_aprobado = pd.to_numeric(aprobados_emp["Monto"], errors="coerce").fillna(0.0).sum()
 
             # Total adelantos
             monto_adelantos = 0.0
             if not df_adelantos.empty and "Trabajador" in df_adelantos.columns:
                 adelantos_emp = df_adelantos[df_adelantos["Trabajador"] == emp]
-                monto_adelantos = adelantos_emp["Monto"].sum() if not adelantos_emp.empty else 0.0
+                if not adelantos_emp.empty:
+                    monto_adelantos = pd.to_numeric(adelantos_emp["Monto"], errors="coerce").fillna(0.0).sum()
 
             saldo_neto = monto_generado_aprobado - monto_adelantos
             
@@ -226,7 +239,7 @@ with tab_liquidacion:
             c1, c2 = st.columns(2)
             with c1:
                 st.write("**Trabajos Aprobados**")
-                if not df_trabajos.empty:
+                if not df_trabajos.empty and "Estado" in df_trabajos.columns:
                     df_ap = df_trabajos[(df_trabajos["Trabajador"] == filtro_trabajador) & (df_trabajos["Estado"] == "Aprobado")]
                     st.dataframe(df_ap[["Fecha", "Descripcion", "Monto"]], use_container_width=True)
             
