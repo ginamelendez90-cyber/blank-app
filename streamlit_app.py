@@ -1,81 +1,62 @@
 import streamlit as st
+from google.cloud import bigquery
 import pandas as pd
+import plotly.express as px
 
-# 1. Configuración de la página para aprovechar el ancho del monitor
-st.set_page_config(page_title="Gestión de Cartera", layout="wide")
+# Configuración de la página
+st.set_page_config(page_title="Football Analytics & Value Bets", layout="wide")
 
-st.title("📊 Cartera de Créditos Activos")
+st.title("⚽ Dashboard Automatizado de Análisis de Fútbol")
+st.markdown("Conectado en tiempo real con **Google Cloud BigQuery**.")
 
-# 2. Función con caché para leer y cruzar los datos
-@st.cache_data
-def cargar_cartera_activa():
-    # Leer el archivo
-    df_clientes = pd.read_excel('cartera_prestamos.xlsx', sheet_name='Clientes')
-    df_prestamos = pd.read_excel('cartera_prestamos.xlsx', sheet_name='Prestamos')
-    df_recaudos = pd.read_excel('cartera_prestamos.xlsx', sheet_name='Recaudos')
-    
-    # Agrupar pagos y cruzar
-    pagos_totales = df_recaudos.groupby('ID_Prestamo')['Monto_Recibido'].sum().reset_index()
-    pagos_totales.rename(columns={'Monto_Recibido': 'Total_Pagado'}, inplace=True)
-    
-    df_cartera = pd.merge(df_prestamos, pagos_totales, on='ID_Prestamo', how='left')
-    df_cartera['Total_Pagado'] = df_cartera['Total_Pagado'].fillna(0)
-    df_cartera['Saldo_Pendiente'] = df_cartera['Total_Deuda'] - df_cartera['Total_Pagado']
-    
-    # Filtrar solo activos (Saldo mayor a 0)
-    cartera_activa = df_cartera[df_cartera['Saldo_Pendiente'] > 0].copy()
-    
-    # Unir con datos del cliente
-    reporte = pd.merge(
-        cartera_activa, 
-        df_clientes[['ID_Cliente', 'Nombre_Completo', 'Telefono', 'Zona_Ruta']], 
-        on='ID_Cliente', 
-        how='left'
-    )
-    return reporte
+# 1. Configuración de la conexión a BigQuery usando los secretos de Streamlit
+@st.cache_resource
+def get_bigquery_client():
+    # Streamlit lee automáticamente las credenciales desde st.secrets
+    return bigquery.Client.from_service_account_info(st.secrets["gcp"])
 
-# 3. Construcción de la Interfaz
+client = get_bigquery_client()
+
+# 2. Función para consultar datos (reemplaza 'tu_proyecto.tu_dataset.tu_tabla' por tus datos reales)
+@st.cache_data(ttl=600) # Cache por 10 minutos
+def load_data(query):
+    query_job = client.query(query)
+    return query_job.to_dataframe()
+
+# Ejemplo de consulta SQL analítica
+default_query = """
+    SELECT 
+        fecha, 
+        liga, 
+        local, 
+        visitante, 
+        cuota_local, 
+        cuota_empate, 
+        cuota_visitante
+    FROM `tu_proyecto.futbol_dataset.partidos_recientes`
+    ORDER BY fecha DESC
+    LIMIT 100
+"""
+
+st.sidebar.header("Filtros de Análisis")
+query_input = st.sidebar.text_area("Consulta SQL en BigQuery", value=default_query, height=150)
+
 try:
-    # Llamamos a la función cacheada
-    df_activos = cargar_cartera_activa()
+    with st.spinner("Consultando BigQuery..."):
+        df = load_data(query_input)
     
-    # --- BARRA LATERAL (FILTROS) ---
-    st.sidebar.header("Filtros de Búsqueda")
+    st.success(f"¡Datos cargados con éxito! ({len(df)} registros encontrados)")
     
-    # Extraer las zonas únicas dinámicamente y agregar "Todas" al inicio
-    lista_zonas = ["Todas"] + list(df_activos['Zona_Ruta'].dropna().unique())
-    zona_seleccionada = st.sidebar.selectbox("Filtrar por Zona / Ruta", lista_zonas)
+    # Mostrar tabla interactiva
+    st.dataframe(df, use_container_width=True)
     
-    # Lógica del filtro
-    if zona_seleccionada != "Todas":
-        df_filtrado = df_activos[df_activos['Zona_Ruta'] == zona_seleccionada]
-    else:
-        df_filtrado = df_activos
-        
-    # --- MÉTRICAS DE CABECERA ---
-    # Mostramos el capital total en la calle y la cantidad de clientes a cobrar
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Total Clientes Activos", len(df_filtrado))
-    with col2:
-        saldo_total = df_filtrado['Saldo_Pendiente'].sum()
-        st.metric("Capital en la Calle (Saldo)", f"${saldo_total:,.2f}")
-        
-    # --- TABLA DE DATOS INTERACTIVA ---
-    st.subheader(f"Ruta de cobro: {zona_seleccionada}")
-    
-    # Seleccionamos solo las columnas relevantes para la tabla
-    columnas_mostrar = [
-        'ID_Prestamo', 'Nombre_Completo', 'Telefono', 
-        'Zona_Ruta', 'Modalidad', 'Valor_Cuota', 'Saldo_Pendiente'
-    ]
-    
-    # Renderizamos la tabla nativa de Streamlit (permite ordenar las columnas con un clic)
-    st.dataframe(
-        df_filtrado[columnas_mostrar],
-        use_container_width=True,
-        hide_index=True
-    )
+    # Ejemplo básico de métrica o gráfico automatizado
+    if "liga" in df.columns:
+        ligas_disponibles = df["liga"].unique()
+        liga_seleccionada = st.selectbox("Filtrar por Liga", ligas_disponibles)
+        df_filtrado = df[df["liga"] == liga_seleccionada]
+        st.subheader(f partidos para {liga_seleccionada})
+        st.dataframe(df_filtrado)
 
-except FileNotFoundError:
-    st.error("No se encontró 'cartera_prestamos.xlsx'. Verifica que esté en la misma carpeta que el script.")
+except Exception as e:
+    st.error(f"Error al conectar con BigQuery o ejecutar la consulta: {e}")
