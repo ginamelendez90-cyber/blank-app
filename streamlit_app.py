@@ -55,7 +55,7 @@ try:
         ligas_disponibles = df["liga"].unique()
         liga_seleccionada = st.selectbox("Filtrar por Liga", ligas_disponibles)
         df_filtrado = df[df["liga"] == liga_seleccionada]
-        st.subheader(f partidos para {liga_seleccionada})
+        st.subheader(f"Partidos para {liga_seleccionada}")
         st.dataframe(df_filtrado)
 
 except Exception as e:
