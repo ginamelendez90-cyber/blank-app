@@ -16,19 +16,16 @@ def init_connection():
     client = gspread.authorize(creds)
     sh = client.open_by_key(st.secrets["spreadsheet_id"])
     
-    # Asegurar hoja de Movimientos con sus encabezados exactos en la fila 1
     try:
         ws_movimientos = sh.worksheet("Movimientos")
     except gspread.exceptions.WorksheetNotFound:
         ws_movimientos = sh.add_worksheet(title="Movimientos", rows=1000, cols=7)
     
-    # Verificar si la primera fila está vacía y escribir encabezados
     headers = ["Fecha", "Tipo", "Cliente_Concepto", "Monto", "Metodo", "Interes_Pct", "Total_Deuda"]
     current_headers = ws_movimientos.row_values(1)
     if not current_headers or current_headers != headers:
         ws_movimientos.update('A1:G1', [headers])
 
-    # Asegurar hoja de Clientes
     try:
         ws_clientes = sh.worksheet("Clientes")
     except gspread.exceptions.WorksheetNotFound:
@@ -55,7 +52,6 @@ def load_clientes():
 def load_movimientos():
     try:
         all_values = ws_movimientos.get_all_values()
-        # Si solo tiene los encabezados o está vacía
         if len(all_values) <= 1:
             return pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
         
@@ -74,7 +70,6 @@ def load_movimientos():
         st.error(f"Error al leer Google Sheets: {e}")
         return pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
 
-# Limpiar caché de datos al recargar para forzar lectura fresca de Google Sheets
 st.cache_data.clear()
 
 lista_clientes = load_clientes()
@@ -83,7 +78,6 @@ df_movimientos_total = load_movimientos()
 # Filtrar movimientos de HOY
 hoy = date.today().strftime("%Y-%m-%d")
 if not df_movimientos_total.empty and 'Fecha' in df_movimientos_total.columns:
-    # Asegurar formato de texto para comparar fecha
     df_movimientos_total['Fecha'] = df_movimientos_total['Fecha'].astype(str)
     df_hoy = df_movimientos_total[df_movimientos_total['Fecha'] == hoy]
 else:
@@ -160,7 +154,6 @@ with tab_operaciones:
                 st.error(f"❌ Fondos insuficientes en caja. Tienes ${efectivo_disponible_actual:.2f} disponibles.")
             else:
                 fecha_hoy = date.today().strftime("%Y-%m-%d")
-                # Insertar fila directamente en Google Sheets
                 ws_movimientos.append_row([
                     str(fecha_hoy), 
                     str(tipo), 
@@ -175,10 +168,36 @@ with tab_operaciones:
         else:
             st.error("Completa todos los campos correctamente.")
 
-    # --- 2. DETALLE DE MOVIMIENTOS DE HOY ---
-    st.header("2. Movimientos del Día")
+    # --- 2. MOVIMIENTOS DEL DÍA DIVIDIDOS ---
+    st.header("2. Movimientos del Día (Organizados)")
+
     if not df_hoy.empty:
-        st.dataframe(df_hoy, use_container_width=True)
+        # Pestañas secundarias para separar las tablas visualmente
+        sub_cobros, sub_prestamos, sub_gastos = st.tabs(["🟢 Cobros Realizados", "🔴 Préstamos Entregados", "🟡 Gastos del Día"])
+
+        with sub_cobros:
+            df_cobros = df_hoy[df_hoy['Tipo'] == 'Cobro']
+            if not df_cobros.empty:
+                st.dataframe(df_cobros[['Fecha', 'Cliente_Concepto', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
+                st.metric("Total Cobrado Hoy", f"${df_cobros['Monto'].sum():.2f}")
+            else:
+                st.info("No hay cobros registrados hoy.")
+
+        with sub_prestamos:
+            df_prestamos = df_hoy[df_hoy['Tipo'] == 'Préstamo']
+            if not df_prestamos.empty:
+                st.dataframe(df_prestamos[['Fecha', 'Cliente_Concepto', 'Monto', 'Interes_Pct', 'Total_Deuda', 'Metodo']], use_container_width=True, hide_index=True)
+                st.metric("Total Prestado Hoy (Capital)", f"${df_prestamos['Monto'].sum():.2f}")
+            else:
+                st.info("No hay préstamos registrados hoy.")
+
+        with sub_gastos:
+            df_gastos = df_hoy[df_hoy['Tipo'] == 'Gasto']
+            if not df_gastos.empty:
+                st.dataframe(df_gastos[['Fecha', 'Cliente_Concepto', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
+                st.metric("Total Gastado Hoy", f"${df_gastos['Monto'].sum():.2f}")
+            else:
+                st.info("No hay gastos registrados hoy.")
     else:
         st.info("No hay movimientos registrados para el día de hoy.")
 
