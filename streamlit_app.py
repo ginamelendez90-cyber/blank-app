@@ -80,17 +80,17 @@ if not df_movimientos_total.empty and 'Fecha' in df_movimientos_total.columns:
     df_movimientos_total['Fecha'] = df_movimientos_total['Fecha'].astype(str)
 
 # --- NAVEGACIÓN POR PESTAÑAS ---
-tab_operaciones, tab_saldos = st.tabs(["📝 Operaciones y Cuadre por Fecha", "📊 Estado de Cuenta (Saldos que Deben)"])
+tab_operaciones, tab_saldos = st.tabs(["📝 Operaciones y Cuadre Diario", "📊 Estado de Cuenta (Saldos que Deben)"])
 
 with tab_operaciones:
-    # Selector de fecha para registrar o consultar cualquier día
+    # Selector de fecha en la barra lateral
     st.sidebar.header("📅 Control de Fecha")
     fecha_seleccionada = st.sidebar.date_input("Selecciona el día a registrar/consultar", date.today())
     fecha_str = fecha_seleccionada.strftime("%Y-%m-%d")
     
     st.info(f"📌 Estás operando en la fecha: **{fecha_str}**")
 
-    # Filtrar movimientos de la fecha seleccionada
+    # Filtrar movimientos exclusivamente de la fecha seleccionada
     if not df_movimientos_total.empty and 'Fecha' in df_movimientos_total.columns:
         df_fecha = df_movimientos_total[df_movimientos_total['Fecha'] == fecha_str]
     else:
@@ -115,7 +115,7 @@ with tab_operaciones:
             st.dataframe(pd.DataFrame(lista_clientes, columns=["Nombre"]), hide_index=True)
 
     # --- 1. FORMULARIO DE INGRESO ---
-    st.header(f"1. Registrar Movimiento para el día: {fecha_str}")
+    st.header(f"1. Registrar Movimiento ({fecha_str})")
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -146,7 +146,7 @@ with tab_operaciones:
         total_deuda_generada = monto + (monto * (interes_pct / 100.0))
         st.write(f"➡️ **Total que el cliente pagará:** ${total_deuda_generada:.2f}")
 
-    # Validación de efectivo en caja para esa fecha
+    # Validación de efectivo disponible en caja (exclusivo para el día seleccionado)
     base_inicial_temp = st.session_state.get(f'base_input_{fecha_str}', 0.0)
     total_cobrado_temp = 0.0
     total_salidas_temp = 0.0
@@ -161,7 +161,7 @@ with tab_operaciones:
     if st.button("Registrar Operación", type="primary"):
         if cliente_concepto and monto > 0:
             if metodo == 'Efectivo' and tipo in ['Préstamo', 'Gasto'] and monto > efectivo_disponible_actual:
-                st.error(f"❌ Fondos insuficientes en caja para esta fecha. Tienes ${efectivo_disponible_actual:.2f} disponibles.")
+                st.error(f"❌ Fondos insuficientes en caja para el {fecha_str}. Tienes ${efectivo_disponible_actual:.2f} disponibles en efectivo.")
             else:
                 ws_movimientos.append_row([
                     str(fecha_str), 
@@ -172,13 +172,13 @@ with tab_operaciones:
                     float(interes_pct if tipo == "Préstamo" else 0.0), 
                     float(total_deuda_generada if tipo == "Préstamo" else 0.0)
                 ])
-                st.success(f"✅ ¡Operación guardada en Google Sheets para el {fecha_str}!")
+                st.success(f"✅ ¡Operación guardada para el {fecha_str}!")
                 st.rerun()
         else:
             st.error("Completa todos los campos correctamente.")
 
-    # --- 2. MOVIMIENTOS DIVIDIDOS DE LA FECHA SELECCIONADA ---
-    st.header(f"2. Movimientos del día {fecha_str} (Organizados)")
+    # --- 2. MOVIMIENTOS DIVIDIDOS DE LA FECHA ---
+    st.header(f"2. Movimientos del Día ({fecha_str})")
 
     if not df_fecha.empty:
         sub_cobros, sub_prestamos, sub_gastos = st.tabs(["🟢 Cobros Realizados", "🔴 Préstamos Entregados", "🟡 Gastos del Día"])
@@ -187,7 +187,7 @@ with tab_operaciones:
             df_cobros = df_fecha[df_fecha['Tipo'] == 'Cobro']
             if not df_cobros.empty:
                 st.dataframe(df_cobros[['Cliente_Concepto', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
-                st.metric("Total Cobrado", f"${df_cobros['Monto'].sum():.2f}")
+                st.metric("Total Cobrado Hoy", f"${df_cobros['Monto'].sum():.2f}")
             else:
                 st.info("No hay cobros registrados en esta fecha.")
 
@@ -195,7 +195,7 @@ with tab_operaciones:
             df_prestamos = df_fecha[df_fecha['Tipo'] == 'Préstamo']
             if not df_prestamos.empty:
                 st.dataframe(df_prestamos[['Cliente_Concepto', 'Monto', 'Interes_Pct', 'Total_Deuda', 'Metodo']], use_container_width=True, hide_index=True)
-                st.metric("Total Prestado (Capital)", f"${df_prestamos['Monto'].sum():.2f}")
+                st.metric("Total Prestado Hoy (Capital)", f"${df_prestamos['Monto'].sum():.2f}")
             else:
                 st.info("No hay préstamos registrados en esta fecha.")
 
@@ -203,45 +203,48 @@ with tab_operaciones:
             df_gastos = df_fecha[df_fecha['Tipo'] == 'Gasto']
             if not df_gastos.empty:
                 st.dataframe(df_gastos[['Cliente_Concepto', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
-                st.metric("Total Gastado", f"${df_gastos['Monto'].sum():.2f}")
+                st.metric("Total Gastado Hoy", f"${df_gastos['Monto'].sum():.2f}")
             else:
                 st.info("No hay gastos registrados en esta fecha.")
     else:
         st.info(f"No hay movimientos registrados para la fecha {fecha_str}.")
 
-    # --- 3. CUADRE DE CAJA ---
-    st.header(f"3. Cuadre de Caja Físico ({fecha_str})")
-    base_inicial = st.number_input("Efectivo de Salida (Base Inicial):", min_value=0.0, step=1.0, key=f'base_input_{fecha_str}')
+    # --- 3. CUADRE DE CAJA DIARIO ---
+    st.header(f"3. Cuadre de Caja Físico Diario ({fecha_str})")
+    
+    # Input de base inicial independiente y guardado por fecha
+    base_inicial = st.number_input(f"Efectivo de Salida (Base Inicial) para el {fecha_str}:", min_value=0.0, step=1.0, key=f'base_input_{fecha_str}')
 
     if not df_fecha.empty and 'Metodo' in df_fecha.columns:
-        df_efectivo = df_fecha[df_fecha['Metodo'] == 'Efectivo']
+        # Filtramos estrictamente los movimientos en EFECTIVO de la fecha seleccionada
+        df_efectivo_dia = df_fecha[df_fecha['Metodo'] == 'Efectivo']
         
         try:
-            total_cobrado = float(df_efectivo[df_efectivo['Tipo'] == 'Cobro']['Monto'].sum()) if not df_efectivo.empty else 0.0
-            total_prestamos = float(df_efectivo[df_efectivo['Tipo'] == 'Préstamo']['Monto'].sum()) if not df_efectivo.empty else 0.0
-            total_gastos = float(df_efectivo[df_efectivo['Tipo'] == 'Gasto']['Monto'].sum()) if not df_efectivo.empty else 0.0
+            total_cobrado_efec = float(df_efectivo_dia[df_efectivo_dia['Tipo'] == 'Cobro']['Monto'].sum()) if not df_efectivo_dia.empty else 0.0
+            total_prestamos_efec = float(df_efectivo_dia[df_efectivo_dia['Tipo'] == 'Préstamo']['Monto'].sum()) if not df_efectivo_dia.empty else 0.0
+            total_gastos_efec = float(df_efectivo_dia[df_efectivo_dia['Tipo'] == 'Gasto']['Monto'].sum()) if not df_efectivo_dia.empty else 0.0
         except KeyError:
-            total_cobrado = total_prestamos = total_gastos = 0.0
+            total_cobrado_efec = total_prestamos_efec = total_gastos_efec = 0.0
 
-        efectivo_calculado = base_inicial + total_cobrado - total_prestamos - total_gastos
+        efectivo_calculado = base_inicial + total_cobrado_efec - total_prestamos_efec - total_gastos_efec
         efectivo_esperado = max(0.0, efectivo_calculado)
 
         colA, colB, colC, colD, colE = st.columns(5)
-        colA.metric("Base", f"${base_inicial:.2f}")
-        colB.metric("Cobros (+)", f"${total_cobrado:.2f}")
-        colC.metric("Préstamos (-)", f"${total_prestamos:.2f}")
-        colD.metric("Gastos (-)", f"${total_gastos:.2f}")
-        colE.metric("EFECTIVO ESPERADO", f"${efectivo_esperado:.2f}")
+        colA.metric("Base Inicial", f"${base_inicial:.2f}")
+        colB.metric("Cobros Efectivo (+)", f"${total_cobrado_efec:.2f}")
+        colC.metric("Préstamos Efectivo (-)", f"${total_prestamos_efec:.2f}")
+        colD.metric("Gastos Efectivo (-)", f"${total_gastos_efec:.2f}")
+        colE.metric("EFECTIVO ESPERADO EN CAJA", f"${efectivo_esperado:.2f}")
 
         if efectivo_calculado < 0:
-            st.warning("⚠️ **Alerta de Caja:** Los préstamos y gastos superan la base y los cobros.")
+            st.warning("⚠️ **Alerta de Caja:** Los préstamos y gastos en efectivo superan la base y los cobros del día.")
     else:
         colA, colB, colC, colD, colE = st.columns(5)
-        colA.metric("Base", f"${base_inicial:.2f}")
-        colB.metric("Cobros (+)", "$0.00")
-        colC.metric("Préstamos (-)", "$0.00")
-        colD.metric("Gastos (-)", "$0.00")
-        colE.metric("EFECTIVO ESPERADO", f"${base_inicial:.2f}")
+        colA.metric("Base Inicial", f"${base_inicial:.2f}")
+        colB.metric("Cobros Efectivo (+)", "$0.00")
+        colC.metric("Préstamos Efectivo (-)", "$0.00")
+        colD.metric("Gastos Efectivo (-)", "$0.00")
+        colE.metric("EFECTIVO ESPERADO EN CAJA", f"${base_inicial:.2f}")
 
 with tab_saldos:
     st.header("📊 Estado de Cuenta Actualizado por Cliente (Histórico Total)")
