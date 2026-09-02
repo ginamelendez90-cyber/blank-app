@@ -1,5 +1,3 @@
-streamlit
-google-cloud-bigquery
 pandas
-plotly
-db-dtypes
+gspread
+oauth2client
