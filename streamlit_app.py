@@ -32,28 +32,42 @@ def init_connection():
 
 sh, ws_movimientos, ws_clientes = init_connection()
 
-# --- CARGAR DATOS DESDE SHEETS ---
+# --- CARGAR DATOS DESDE SHEETS (CON PROTECCIÓN CONTRA HOJAS VACÍAS) ---
 def load_clientes():
-    return ws_clientes.col_values(1)[1:]
+    values = ws_clientes.col_values(1)
+    if len(values) > 1:
+        return values[1:] # Omitir encabezado
+    return []
 
 def load_movimientos():
-    records = ws_movimientos.get_all_records()
-    df = pd.DataFrame(records)
-    if df.empty:
-        df = pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
-    else:
-        # Asegurar columnas por compatibilidad
+    try:
+        # Verificamos si hay al menos una fila con datos además de los encabezados
+        all_values = ws_movimientos.get_all_values()
+        if len(all_values) <= 1:
+            return pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
+        
+        records = ws_movimientos.get_all_records()
+        df = pd.DataFrame(records)
+        
+        if df.empty:
+            return pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
+            
         for col in ['Interes_Pct', 'Total_Deuda']:
             if col not in df.columns:
                 df[col] = 0.0
-    return df
+        return df
+    except Exception:
+        return pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
 
 lista_clientes = load_clientes()
 df_movimientos_total = load_movimientos()
 
 # Filtrar movimientos de HOY para el cuadre diario
 hoy = date.today().strftime("%Y-%m-%d")
-df_hoy = df_movimientos_total[df_movimientos_total['Fecha'] == hoy] if not df_movimientos_total.empty else pd.DataFrame(columns=df_movimientos_total.columns)
+if not df_movimientos_total.empty and 'Fecha' in df_movimientos_total.columns:
+    df_hoy = df_movimientos_total[df_movimientos_total['Fecha'] == hoy]
+else:
+    df_hoy = pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
 
 # --- NAVEGACIÓN POR PESTAÑAS ---
 tab_operaciones, tab_saldos = st.tabs(["📝 Operaciones del Día", "📊 Estado de Cuenta (Saldos que Deben)"])
@@ -99,7 +113,6 @@ with tab_operaciones:
     with col4:
         metodo = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Pago Móvil"])
 
-    # Campos adicionales si es un Préstamo (Interés)
     interes_pct = 0.0
     total_deuda_generada = 0.0
 
@@ -127,7 +140,6 @@ with tab_operaciones:
                 st.error(f"❌ Fondos insuficientes en caja. Intentas registrar {tipo.lower()} por ${monto:.2f}, pero tu efectivo disponible es ${efectivo_disponible_actual:.2f}.")
             else:
                 fecha_hoy = date.today().strftime("%Y-%m-%d")
-                # Estructura: Fecha, Tipo, Cliente_Concepto, Monto, Metodo, Interes_Pct, Total_Deuda
                 ws_movimientos.append_row([
                     fecha_hoy, 
                     tipo, 
@@ -144,7 +156,10 @@ with tab_operaciones:
 
     # --- 2. DETALLE DE MOVIMIENTOS DE HOY ---
     st.header("2. Movimientos del Día")
-    st.dataframe(df_hoy, use_container_width=True)
+    if not df_hoy.empty:
+        st.dataframe(df_hoy, use_container_width=True)
+    else:
+        st.info("No hay movimientos registrados para el día de hoy.")
 
     # --- 3. CUADRE DE CAJA ---
     st.header("3. Cuadre de Caja Físico")
@@ -179,30 +194,26 @@ with tab_operaciones:
         colC.metric("Préstamos (-)", "$0.00")
         colD.metric("Gastos (-)", "$0.00")
         colE.metric("EFECTIVO ESPERADO", f"${base_inicial:.2f}")
-        st.info("Aún no hay movimientos registrados hoy.")
 
 with tab_saldos:
     st.header("📊 Estado de Cuenta Actualizado por Cliente")
-    st.write("Aquí puedes ver exactamente cuánto debe cada cliente en total. El saldo se incrementa cuando se le presta (con su respectivo interés) y disminuye automáticamente cada vez que abona.")
+    st.write("Aquí puedes ver exactamente cuánto debe cada cliente en total (incluyendo intereses) menos sus abonos.")
 
     if not df_movimientos_total.empty and len(lista_clientes) > 0:
         resumen_clientes = []
         
         for cliente in lista_clientes:
-            # Filtrar movimientos de este cliente específico
             df_cli = df_movimientos_total[df_movimientos_total['Cliente_Concepto'] == cliente]
             
             if not df_cli.empty:
-                # Sumar toda la deuda generada por préstamos con interés
+                # Sumar la deuda total con interés
                 total_deuda = float(df_cli[df_cli['Tipo'] == 'Préstamo']['Total_Deuda'].sum())
-                # Si algún préstamo antiguo no tiene Total_Deuda registrado, usar el monto base
                 prestamos_sin_columna = df_cli[(df_cli['Tipo'] == 'Préstamo') & (df_cli['Total_Deuda'] == 0.0)]['Monto'].sum()
                 total_deuda += prestamos_sin_columna
                 
-                # Sumar todos los abonos/cobros realizados por el cliente
+                # Sumar abonos
                 total_abonado = float(df_cli[df_cli['Tipo'] == 'Cobro']['Monto'].sum())
                 
-                # Saldo pendiente
                 saldo_pendiente = total_deuda - total_abonado
             else:
                 total_deuda = 0.0
@@ -219,8 +230,7 @@ with tab_saldos:
         df_resumen = pd.DataFrame(resumen_clientes)
         st.dataframe(df_resumen, use_container_width=True, hide_index=True)
         
-        # Métrica global
         deuda_total_calle = df_resumen["Saldo Pendiente"].sum()
         st.metric("💰 Dinero Total Pendiente en la Calle (Saldos)", f"${deuda_total_calle:.2f}")
     else:
-        st.info("No hay suficientes datos o clientes registrados para generar el estado de cuenta.")
+        st.info("Aún no hay clientes o movimientos suficientes para calcular los saldos.")
