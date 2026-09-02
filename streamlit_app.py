@@ -1,60 +1,82 @@
 import streamlit as st
 import pandas as pd
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from datetime import date
 
-# Configuración
 st.set_page_config(page_title="Control de Cobranza", layout="wide")
 st.title("💸 Control Diario de Ruta")
 
-# 1. Inicializar bases de datos en memoria (Session State)
-if 'movimientos' not in st.session_state:
-    st.session_state.movimientos = pd.DataFrame(
-        columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo']
-    )
-    
-# Nueva base para clientes registrados
-if 'clientes' not in st.session_state:
-    st.session_state.clientes = [] # Inicia la lista vacía
+# --- CONEXIÓN A GOOGLE SHEETS ---
+@st.cache_resource
+def init_connection():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    # Leer credenciales desde secrets.toml
+    creds_dict = st.secrets["gcp_service_account"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client.open_by_key(st.secrets["spreadsheet_id"])
+
+sh = init_connection()
+ws_movimientos = sh.worksheet("Movimientos")
+ws_clientes = sh.worksheet("Clientes")
+
+# --- CARGAR DATOS DESDE SHEETS ---
+def load_clientes():
+    # Trae la columna 1, omitiendo el encabezado
+    records = ws_clientes.col_values(1)[1:]
+    return records
+
+def load_movimientos_hoy():
+    # Trae todos los registros
+    records = ws_movimientos.get_all_records()
+    df = pd.DataFrame(records)
+    # Filtrar solo los de la fecha actual para el cuadre
+    hoy = date.today().strftime("%Y-%m-%d")
+    if not df.empty:
+        df = df[df['Fecha'] == hoy]
+    else:
+        df = pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo'])
+    return df
+
+# Cargar a variables locales (simulando estado)
+lista_clientes = load_clientes()
+df_hoy = load_movimientos_hoy()
 
 # --- MENÚ LATERAL: DIRECTORIO DE CLIENTES ---
 with st.sidebar:
     st.header("👥 Nuevo Cliente")
-    st.write("Registra aquí los clientes para próximos créditos.")
-    
     nuevo_cliente = st.text_input("Nombre completo")
     if st.button("Guardar Cliente"):
-        if nuevo_cliente and nuevo_cliente not in st.session_state.clientes:
-            st.session_state.clientes.append(nuevo_cliente)
-            st.success(f"{nuevo_cliente} guardado.")
-        elif nuevo_cliente in st.session_state.clientes:
-            st.warning("El cliente ya existe en el directorio.")
+        if nuevo_cliente and nuevo_cliente not in lista_clientes:
+            # Impactar directamente en Google Sheets
+            ws_clientes.append_row([nuevo_cliente])
+            st.success(f"{nuevo_cliente} guardado en la nube.")
+            st.rerun() # Recarga para actualizar la lista
+        elif nuevo_cliente in lista_clientes:
+            st.warning("El cliente ya existe.")
             
     st.divider()
     st.subheader("Clientes Registrados")
-    # Mostramos la lista actual para control visual
-    if len(st.session_state.clientes) > 0:
-        st.dataframe(pd.DataFrame(st.session_state.clientes, columns=["Nombre"]), hide_index=True)
-    else:
-        st.info("No hay clientes registrados aún.")
+    if len(lista_clientes) > 0:
+        st.dataframe(pd.DataFrame(lista_clientes, columns=["Nombre"]), hide_index=True)
 
-# --- 1. FORMULARIO DE INGRESO (Dinámico) ---
+# --- 1. FORMULARIO DE INGRESO ---
 st.header("1. Registrar Movimiento")
-
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     tipo = st.selectbox("Tipo", ["Cobro", "Préstamo", "Gasto"])
 
 with col2:
-    # La interfaz cambia dependiendo de lo que elijas en "Tipo"
     if tipo in ["Cobro", "Préstamo"]:
-        if len(st.session_state.clientes) == 0:
-            st.warning("Agrega clientes en el menú lateral 👈")
+        if len(lista_clientes) == 0:
+            st.warning("Agrega clientes primero 👈")
             cliente_concepto = None
         else:
-            cliente_concepto = st.selectbox("Seleccionar Cliente", st.session_state.clientes)
+            cliente_concepto = st.selectbox("Seleccionar Cliente", lista_clientes)
     else:
-        cliente_concepto = st.text_input("Concepto del Gasto (Ej. Gasolina, Comida)")
+        cliente_concepto = st.text_input("Concepto del Gasto")
 
 with col3:
     monto = st.number_input("Monto ($)", min_value=0.0, step=1.0)
@@ -64,52 +86,40 @@ with col4:
 
 if st.button("Registrar Operación", type="primary"):
     if cliente_concepto and monto > 0:
-        nuevo_registro = pd.DataFrame({
-            'Fecha': [date.today().strftime("%Y-%m-%d")],
-            'Tipo': [tipo],
-            'Cliente_Concepto': [cliente_concepto],
-            'Monto': [monto],
-            'Metodo': [metodo]
-        })
-        st.session_state.movimientos = pd.concat(
-            [st.session_state.movimientos, nuevo_registro], 
-            ignore_index=True
-        )
-        st.success("✅ Operación guardada exitosamente.")
+        fecha_hoy = date.today().strftime("%Y-%m-%d")
+        # Escribir directamente en la hoja "Movimientos"
+        ws_movimientos.append_row([fecha_hoy, tipo, cliente_concepto, monto, metodo])
+        st.success("✅ Operación sincronizada con Google Sheets.")
+        st.rerun() # Recarga para que se refleje en la tabla de abajo
     else:
-        st.error("Por favor completa el cliente/concepto y asegúrate de que el monto sea mayor a 0.")
+        st.error("Completa todos los campos.")
 
 # --- 2. DETALLE DE MOVIMIENTOS ---
 st.header("2. Movimientos del Día")
-st.dataframe(st.session_state.movimientos, use_container_width=True)
+st.dataframe(df_hoy, use_container_width=True)
 
 # --- 3. CUADRE DE CAJA ---
 st.header("3. Cuadre de Caja Físico")
 base_inicial = st.number_input("Efectivo de Salida (Base Inicial):", min_value=0.0, step=1.0)
 
-# Cálculos automáticos
-df = st.session_state.movimientos
-df_efectivo = df[df['Metodo'] == 'Efectivo']
+if not df_hoy.empty:
+    df_efectivo = df_hoy[df_hoy['Metodo'] == 'Efectivo']
+    
+    # Manejar posibles errores si no hay registros de un tipo específico
+    try:
+        total_cobrado = float(df_efectivo[df_efectivo['Tipo'] == 'Cobro']['Monto'].sum())
+        total_prestamos = float(df_efectivo[df_efectivo['Tipo'] == 'Préstamo']['Monto'].sum())
+        total_gastos = float(df_efectivo[df_efectivo['Tipo'] == 'Gasto']['Monto'].sum())
+    except KeyError:
+        total_cobrado = total_prestamos = total_gastos = 0.0
 
-total_cobrado = df_efectivo[df_efectivo['Tipo'] == 'Cobro']['Monto'].sum()
-total_prestamos = df_efectivo[df_efectivo['Tipo'] == 'Préstamo']['Monto'].sum()
-total_gastos = df_efectivo[df_efectivo['Tipo'] == 'Gasto']['Monto'].sum()
+    efectivo_esperado = base_inicial + total_cobrado - total_prestamos - total_gastos
 
-efectivo_esperado = base_inicial + total_cobrado - total_prestamos - total_gastos
-
-colA, colB, colC, colD, colE = st.columns(5)
-colA.metric("Base", f"${base_inicial:.2f}")
-colB.metric("Cobros (+)", f"${total_cobrado:.2f}")
-colC.metric("Préstamos (-)", f"${total_prestamos:.2f}")
-colD.metric("Gastos (-)", f"${total_gastos:.2f}")
-colE.metric("EFECTIVO ESPERADO", f"${efectivo_esperado:.2f}")
-
-# --- 4. EXPORTACIÓN PARA EXCEL ---
-st.header("4. Reporte para Jefatura")
-csv = df.to_csv(index=False).encode('utf-8')
-st.download_button(
-    label="📥 Descargar Reporte (CSV)",
-    data=csv,
-    file_name=f"reporte_cobranza_{date.today()}.csv",
-    mime="text/csv",
-)
+    colA, colB, colC, colD, colE = st.columns(5)
+    colA.metric("Base", f"${base_inicial:.2f}")
+    colB.metric("Cobros (+)", f"${total_cobrado:.2f}")
+    colC.metric("Préstamos (-)", f"${total_prestamos:.2f}")
+    colD.metric("Gastos (-)", f"${total_gastos:.2f}")
+    colE.metric("EFECTIVO ESPERADO", f"${efectivo_esperado:.2f}")
+else:
+    st.info("Aún no hay movimientos registrados hoy.")
