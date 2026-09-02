@@ -16,33 +16,46 @@ def init_connection():
     client = gspread.authorize(creds)
     sh = client.open_by_key(st.secrets["spreadsheet_id"])
     
+    # Asegurar hoja de Movimientos con sus encabezados exactos en la fila 1
     try:
         ws_movimientos = sh.worksheet("Movimientos")
     except gspread.exceptions.WorksheetNotFound:
         ws_movimientos = sh.add_worksheet(title="Movimientos", rows=1000, cols=7)
-        ws_movimientos.append_row(["Fecha", "Tipo", "Cliente_Concepto", "Monto", "Metodo", "Interes_Pct", "Total_Deuda"])
+    
+    # Verificar si la primera fila está vacía y escribir encabezados
+    headers = ["Fecha", "Tipo", "Cliente_Concepto", "Monto", "Metodo", "Interes_Pct", "Total_Deuda"]
+    current_headers = ws_movimientos.row_values(1)
+    if not current_headers or current_headers != headers:
+        ws_movimientos.update('A1:G1', [headers])
 
+    # Asegurar hoja de Clientes
     try:
         ws_clientes = sh.worksheet("Clientes")
     except gspread.exceptions.WorksheetNotFound:
         ws_clientes = sh.add_worksheet(title="Clientes", rows=1000, cols=1)
-        ws_clientes.append_row(["Nombre"])
+    
+    current_headers_cli = ws_clientes.row_values(1)
+    if not current_headers_cli or current_headers_cli != ["Nombre"]:
+        ws_clientes.update('A1', [["Nombre"]])
 
     return sh, ws_movimientos, ws_clientes
 
 sh, ws_movimientos, ws_clientes = init_connection()
 
-# --- CARGAR DATOS DESDE SHEETS (CON PROTECCIÓN CONTRA HOJAS VACÍAS) ---
+# --- CARGAR DATOS DESDE SHEETS ---
 def load_clientes():
-    values = ws_clientes.col_values(1)
-    if len(values) > 1:
-        return values[1:] # Omitir encabezado
+    try:
+        values = ws_clientes.col_values(1)
+        if len(values) > 1:
+            return values[1:]
+    except Exception:
+        pass
     return []
 
 def load_movimientos():
     try:
-        # Verificamos si hay al menos una fila con datos además de los encabezados
         all_values = ws_movimientos.get_all_values()
+        # Si solo tiene los encabezados o está vacía
         if len(all_values) <= 1:
             return pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
         
@@ -52,19 +65,26 @@ def load_movimientos():
         if df.empty:
             return pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
             
-        for col in ['Interes_Pct', 'Total_Deuda']:
-            if col not in df.columns:
-                df[col] = 0.0
+        for col in ['Interes_Pct', 'Total_Deuda', 'Monto']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+                
         return df
-    except Exception:
+    except Exception as e:
+        st.error(f"Error al leer Google Sheets: {e}")
         return pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
+
+# Limpiar caché de datos al recargar para forzar lectura fresca de Google Sheets
+st.cache_data.clear()
 
 lista_clientes = load_clientes()
 df_movimientos_total = load_movimientos()
 
-# Filtrar movimientos de HOY para el cuadre diario
+# Filtrar movimientos de HOY
 hoy = date.today().strftime("%Y-%m-%d")
 if not df_movimientos_total.empty and 'Fecha' in df_movimientos_total.columns:
+    # Asegurar formato de texto para comparar fecha
+    df_movimientos_total['Fecha'] = df_movimientos_total['Fecha'].astype(str)
     df_hoy = df_movimientos_total[df_movimientos_total['Fecha'] == hoy]
 else:
     df_hoy = pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
@@ -80,7 +100,7 @@ with tab_operaciones:
         if st.button("Guardar Cliente"):
             if nuevo_cliente and nuevo_cliente not in lista_clientes:
                 ws_clientes.append_row([nuevo_cliente])
-                st.success(f"{nuevo_cliente} guardado en la nube.")
+                st.success(f"{nuevo_cliente} guardado.")
                 st.rerun()
             elif nuevo_cliente in lista_clientes:
                 st.warning("El cliente ya existe.")
@@ -120,9 +140,9 @@ with tab_operaciones:
         st.info("💡 Configuración del Crédito con Interés")
         interes_pct = st.number_input("Porcentaje de Interés (%)", min_value=0.0, value=10.0, step=1.0)
         total_deuda_generada = monto + (monto * (interes_pct / 100.0))
-        st.write(f"➡️ **Total que el cliente pagará (Capital + {interes_pct}%):** ${total_deuda_generada:.2f}")
+        st.write(f"➡️ **Total que el cliente pagará:** ${total_deuda_generada:.2f}")
 
-    # Cálculo previo para validar efectivo en caja
+    # Validación de efectivo en caja
     base_inicial_temp = st.session_state.get('base_input', 0.0)
     total_cobrado_temp = 0.0
     total_salidas_temp = 0.0
@@ -137,19 +157,20 @@ with tab_operaciones:
     if st.button("Registrar Operación", type="primary"):
         if cliente_concepto and monto > 0:
             if metodo == 'Efectivo' and tipo in ['Préstamo', 'Gasto'] and monto > efectivo_disponible_actual:
-                st.error(f"❌ Fondos insuficientes en caja. Intentas registrar {tipo.lower()} por ${monto:.2f}, pero tu efectivo disponible es ${efectivo_disponible_actual:.2f}.")
+                st.error(f"❌ Fondos insuficientes en caja. Tienes ${efectivo_disponible_actual:.2f} disponibles.")
             else:
                 fecha_hoy = date.today().strftime("%Y-%m-%d")
+                # Insertar fila directamente en Google Sheets
                 ws_movimientos.append_row([
-                    fecha_hoy, 
-                    tipo, 
-                    cliente_concepto, 
-                    monto, 
-                    metodo, 
-                    interes_pct if tipo == "Préstamo" else 0.0, 
-                    total_deuda_generada if tipo == "Préstamo" else 0.0
+                    str(fecha_hoy), 
+                    str(tipo), 
+                    str(cliente_concepto), 
+                    float(monto), 
+                    str(metodo), 
+                    float(interes_pct if tipo == "Préstamo" else 0.0), 
+                    float(total_deuda_generada if tipo == "Préstamo" else 0.0)
                 ])
-                st.success("✅ Operación sincronizada con Google Sheets.")
+                st.success("✅ ¡Operación guardada en Google Sheets con éxito!")
                 st.rerun()
         else:
             st.error("Completa todos los campos correctamente.")
@@ -206,12 +227,10 @@ with tab_saldos:
             df_cli = df_movimientos_total[df_movimientos_total['Cliente_Concepto'] == cliente]
             
             if not df_cli.empty:
-                # Sumar la deuda total con interés
                 total_deuda = float(df_cli[df_cli['Tipo'] == 'Préstamo']['Total_Deuda'].sum())
                 prestamos_sin_columna = df_cli[(df_cli['Tipo'] == 'Préstamo') & (df_cli['Total_Deuda'] == 0.0)]['Monto'].sum()
                 total_deuda += prestamos_sin_columna
                 
-                # Sumar abonos
                 total_abonado = float(df_cli[df_cli['Tipo'] == 'Cobro']['Monto'].sum())
                 
                 saldo_pendiente = total_deuda - total_abonado
