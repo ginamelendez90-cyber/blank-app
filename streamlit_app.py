@@ -16,7 +16,6 @@ def init_connection():
     client = gspread.authorize(creds)
     sh = client.open_by_key(st.secrets["spreadsheet_id"])
     
-    # Automatizar la creación de pestañas y encabezados si no existen
     try:
         ws_movimientos = sh.worksheet("Movimientos")
     except gspread.exceptions.WorksheetNotFound:
@@ -91,14 +90,30 @@ with col3:
 with col4:
     metodo = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Pago Móvil"])
 
+# Cálculo previo en memoria para validación de efectivo antes de registrar
+base_inicial_temp = st.session_state.get('base_input', 0.0)
+total_cobrado_temp = 0.0
+total_salidas_temp = 0.0
+
+if not df_hoy.empty and 'Metodo' in df_hoy.columns:
+    df_efec_temp = df_hoy[df_hoy['Metodo'] == 'Efectivo']
+    total_cobrado_temp = float(df_efec_temp[df_efec_temp['Tipo'] == 'Cobro']['Monto'].sum()) if not df_efec_temp.empty else 0.0
+    total_salidas_temp = float(df_efec_temp[df_efec_temp['Tipo'].isin(['Préstamo', 'Gasto'])]['Monto'].sum()) if not df_efec_temp.empty else 0.0
+
+efectivo_disponible_actual = base_inicial_temp + total_cobrado_temp - total_salidas_temp
+
 if st.button("Registrar Operación", type="primary"):
     if cliente_concepto and monto > 0:
-        fecha_hoy = date.today().strftime("%Y-%m-%d")
-        ws_movimientos.append_row([fecha_hoy, tipo, cliente_concepto, monto, metodo])
-        st.success("✅ Operación sincronizada con Google Sheets.")
-        st.rerun()
+        # Validación de seguridad: No puedes prestar/gastar más de lo que tienes en efectivo físico (si es en efectivo)
+        if metodo == 'Efectivo' and tipo in ['Préstamo', 'Gasto'] and monto > efectivo_disponible_actual:
+            st.error(f"❌ Fondos insuficientes en caja. Intentas registrar {tipo.lower()} por ${monto:.2f}, pero tu efectivo disponible en caja es ${efectivo_disponible_actual:.2f}.")
+        else:
+            fecha_hoy = date.today().strftime("%Y-%m-%d")
+            ws_movimientos.append_row([fecha_hoy, tipo, cliente_concepto, monto, metodo])
+            st.success("✅ Operación sincronizada con Google Sheets.")
+            st.rerun()
     else:
-        st.error("Completa todos los campos.")
+        st.error("Completa todos los campos correctamente.")
 
 # --- 2. DETALLE DE MOVIMIENTOS ---
 st.header("2. Movimientos del Día")
@@ -106,7 +121,7 @@ st.dataframe(df_hoy, use_container_width=True)
 
 # --- 3. CUADRE DE CAJA ---
 st.header("3. Cuadre de Caja Físico")
-base_inicial = st.number_input("Efectivo de Salida (Base Inicial):", min_value=0.0, step=1.0)
+base_inicial = st.number_input("Efectivo de Salida (Base Inicial):", min_value=0.0, step=1.0, key='base_input')
 
 if not df_hoy.empty and 'Metodo' in df_hoy.columns:
     df_efectivo = df_hoy[df_hoy['Metodo'] == 'Efectivo']
@@ -118,7 +133,9 @@ if not df_hoy.empty and 'Metodo' in df_hoy.columns:
     except KeyError:
         total_cobrado = total_prestamos = total_gastos = 0.0
 
-    efectivo_esperado = base_inicial + total_cobrado - total_prestamos - total_gastos
+    # Cálculo real protegido contra negativos
+    efectivo_calculado = base_inicial + total_cobrado - total_prestamos - total_gastos
+    efectivo_esperado = max(0.0, efectivo_calculado) # Nunca baja de 0
 
     colA, colB, colC, colD, colE = st.columns(5)
     colA.metric("Base", f"${base_inicial:.2f}")
@@ -126,5 +143,15 @@ if not df_hoy.empty and 'Metodo' in df_hoy.columns:
     colC.metric("Préstamos (-)", f"${total_prestamos:.2f}")
     colD.metric("Gastos (-)", f"${total_gastos:.2f}")
     colE.metric("EFECTIVO ESPERADO", f"${efectivo_esperado:.2f}")
+
+    if efectivo_calculado < 0:
+        st.warning("⚠️ **Alerta de Caja:** Los préstamos y gastos en efectivo superan la base y los cobros acumulados. Revisa los montos registrados porque físicamente no puedes entregar más de lo que tienes.")
 else:
+    efectivo_esperado = base_inicial
+    colA, colB, colC, colD, colE = st.columns(5)
+    colA.metric("Base", f"${base_inicial:.2f}")
+    colB.metric("Cobros (+)", "$0.00")
+    colC.metric("Préstamos (-)", "$0.00")
+    colD.metric("Gastos (-)", "$0.00")
+    colE.metric("EFECTIVO ESPERADO", f"${base_inicial:.2f}")
     st.info("Aún no hay movimientos registrados hoy.")
