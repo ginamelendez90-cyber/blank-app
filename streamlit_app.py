@@ -80,7 +80,7 @@ if not df_movimientos_total.empty and 'Fecha' in df_movimientos_total.columns:
     df_movimientos_total['Fecha'] = df_movimientos_total['Fecha'].astype(str)
 
 # --- NAVEGACIÓN POR PESTAÑAS ---
-tab_operaciones, tab_saldos = st.tabs(["📝 Operaciones y Cuadre Diario", "📊 Estado de Cuenta (Saldos que Deben)"])
+tab_operaciones, tab_saldos = st.tabs(["📝 Operaciones y Cuadre Diario", "📊 Estado de Cuenta y Fechas de Abonos"])
 
 with tab_operaciones:
     # Selector de fecha en la barra lateral
@@ -212,11 +212,9 @@ with tab_operaciones:
     # --- 3. CUADRE DE CAJA DIARIO ---
     st.header(f"3. Cuadre de Caja Físico Diario ({fecha_str})")
     
-    # Input de base inicial independiente y guardado por fecha
     base_inicial = st.number_input(f"Efectivo de Salida (Base Inicial) para el {fecha_str}:", min_value=0.0, step=1.0, key=f'base_input_{fecha_str}')
 
     if not df_fecha.empty and 'Metodo' in df_fecha.columns:
-        # Filtramos estrictamente los movimientos en EFECTIVO de la fecha seleccionada
         df_efectivo_dia = df_fecha[df_fecha['Metodo'] == 'Efectivo']
         
         try:
@@ -247,8 +245,8 @@ with tab_operaciones:
         colE.metric("EFECTIVO ESPERADO EN CAJA", f"${base_inicial:.2f}")
 
 with tab_saldos:
-    st.header("📊 Estado de Cuenta Actualizado por Cliente (Histórico Total)")
-    st.write("Esta tabla calcula la deuda global de cada cliente sumando **todos sus préstamos con interés** y restando **todos sus abonos históricos**, sin importar de qué fecha sean.")
+    st.header("📊 Estado de Cuenta y Fechas de Abonos por Cliente")
+    st.write("Consulta la deuda global de cada cliente y selecciona un cliente abajo para ver el **historial detallado con las fechas exactas de sus abonos**.")
 
     if not df_movimientos_total.empty and len(lista_clientes) > 0:
         resumen_clientes = []
@@ -281,5 +279,33 @@ with tab_saldos:
         
         deuda_total_calle = df_resumen["Saldo Pendiente"].sum()
         st.metric("💰 Dinero Total Pendiente en la Calle (Saldos)", f"${deuda_total_calle:.2f}")
+
+        st.divider()
+        st.subheader("🔍 Ventana de Detalle: Ver Fechas de Abonos y Préstamos por Cliente")
+        
+        cliente_elegido = st.selectbox("Selecciona un cliente para revisar sus fechas de pago:", lista_clientes, key="detalle_cliente_saldos")
+        
+        df_cli_detalles = df_movimientos_total[df_movimientos_total['Cliente_Concepto'] == cliente_elegido]
+        
+        if not df_cli_detalles.empty:
+            col_abono_det, col_prest_det = st.columns(2)
+            
+            with col_abono_det:
+                st.markdown("##### 🟢 Abonos Realizados (Con Fecha)")
+                df_abonos_cli = df_cli_detalles[df_cli_detalles['Tipo'] == 'Cobro']
+                if not df_abonos_cli.empty:
+                    st.dataframe(df_abonos_cli[['Fecha', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Este cliente no registra abonos aún.")
+                    
+            with col_prest_det:
+                st.markdown("##### 🔴 Préstamos Otorgados (Con Fecha)")
+                df_prest_cli = df_cli_detalles[df_cli_detalles['Tipo'] == 'Préstamo']
+                if not df_prest_cli.empty:
+                    st.dataframe(df_prest_cli[['Fecha', 'Monto', 'Interes_Pct', 'Total_Deuda', 'Metodo']], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Este cliente no registra préstamos aún.")
+        else:
+            st.info("No hay movimientos registrados para este cliente.")
     else:
         st.info("Aún no hay clientes o movimientos suficientes para calcular los saldos.")
