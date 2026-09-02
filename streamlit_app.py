@@ -7,39 +7,47 @@ from datetime import date
 st.set_page_config(page_title="Control de Cobranza", layout="wide")
 st.title("💸 Control Diario de Ruta")
 
-# --- CONEXIÓN A GOOGLE SHEETS ---
+# --- CONEXIÓN Y AUTO-CONFIGURACIÓN DE GOOGLE SHEETS ---
 @st.cache_resource
 def init_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # Leer credenciales desde secrets.toml
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    return client.open_by_key(st.secrets["spreadsheet_id"])
+    sh = client.open_by_key(st.secrets["spreadsheet_id"])
+    
+    # Automatizar la creación de pestañas y encabezados si no existen
+    try:
+        ws_movimientos = sh.worksheet("Movimientos")
+    except gspread.exceptions.WorksheetNotFound:
+        ws_movimientos = sh.add_worksheet(title="Movimientos", rows=1000, cols=5)
+        ws_movimientos.append_row(["Fecha", "Tipo", "Cliente_Concepto", "Monto", "Metodo"])
 
-sh = init_connection()
-ws_movimientos = sh.worksheet("Movimientos")
-ws_clientes = sh.worksheet("Clientes")
+    try:
+        ws_clientes = sh.worksheet("Clientes")
+    except gspread.exceptions.WorksheetNotFound:
+        ws_clientes = sh.add_worksheet(title="Clientes", rows=1000, cols=1)
+        ws_clientes.append_row(["Nombre"])
+
+    return sh, ws_movimientos, ws_clientes
+
+sh, ws_movimientos, ws_clientes = init_connection()
 
 # --- CARGAR DATOS DESDE SHEETS ---
 def load_clientes():
-    # Trae la columna 1, omitiendo el encabezado
     records = ws_clientes.col_values(1)[1:]
     return records
 
 def load_movimientos_hoy():
-    # Trae todos los registros
     records = ws_movimientos.get_all_records()
     df = pd.DataFrame(records)
-    # Filtrar solo los de la fecha actual para el cuadre
     hoy = date.today().strftime("%Y-%m-%d")
-    if not df.empty:
+    if not df.empty and 'Fecha' in df.columns:
         df = df[df['Fecha'] == hoy]
     else:
         df = pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo'])
     return df
 
-# Cargar a variables locales (simulando estado)
 lista_clientes = load_clientes()
 df_hoy = load_movimientos_hoy()
 
@@ -49,10 +57,9 @@ with st.sidebar:
     nuevo_cliente = st.text_input("Nombre completo")
     if st.button("Guardar Cliente"):
         if nuevo_cliente and nuevo_cliente not in lista_clientes:
-            # Impactar directamente en Google Sheets
             ws_clientes.append_row([nuevo_cliente])
             st.success(f"{nuevo_cliente} guardado en la nube.")
-            st.rerun() # Recarga para actualizar la lista
+            st.rerun()
         elif nuevo_cliente in lista_clientes:
             st.warning("El cliente ya existe.")
             
@@ -87,10 +94,9 @@ with col4:
 if st.button("Registrar Operación", type="primary"):
     if cliente_concepto and monto > 0:
         fecha_hoy = date.today().strftime("%Y-%m-%d")
-        # Escribir directamente en la hoja "Movimientos"
         ws_movimientos.append_row([fecha_hoy, tipo, cliente_concepto, monto, metodo])
         st.success("✅ Operación sincronizada con Google Sheets.")
-        st.rerun() # Recarga para que se refleje en la tabla de abajo
+        st.rerun()
     else:
         st.error("Completa todos los campos.")
 
@@ -102,14 +108,13 @@ st.dataframe(df_hoy, use_container_width=True)
 st.header("3. Cuadre de Caja Físico")
 base_inicial = st.number_input("Efectivo de Salida (Base Inicial):", min_value=0.0, step=1.0)
 
-if not df_hoy.empty:
+if not df_hoy.empty and 'Metodo' in df_hoy.columns:
     df_efectivo = df_hoy[df_hoy['Metodo'] == 'Efectivo']
     
-    # Manejar posibles errores si no hay registros de un tipo específico
     try:
-        total_cobrado = float(df_efectivo[df_efectivo['Tipo'] == 'Cobro']['Monto'].sum())
-        total_prestamos = float(df_efectivo[df_efectivo['Tipo'] == 'Préstamo']['Monto'].sum())
-        total_gastos = float(df_efectivo[df_efectivo['Tipo'] == 'Gasto']['Monto'].sum())
+        total_cobrado = float(df_efectivo[df_efectivo['Tipo'] == 'Cobro']['Monto'].sum()) if not df_efectivo.empty else 0.0
+        total_prestamos = float(df_efectivo[df_efectivo['Tipo'] == 'Préstamo']['Monto'].sum()) if not df_efectivo.empty else 0.0
+        total_gastos = float(df_efectivo[df_efectivo['Tipo'] == 'Gasto']['Monto'].sum()) if not df_efectivo.empty else 0.0
     except KeyError:
         total_cobrado = total_prestamos = total_gastos = 0.0
 
