@@ -75,20 +75,30 @@ st.cache_data.clear()
 lista_clientes = load_clientes()
 df_movimientos_total = load_movimientos()
 
-# Filtrar movimientos de HOY
-hoy = date.today().strftime("%Y-%m-%d")
+# Asegurar formato de texto para la columna de fecha
 if not df_movimientos_total.empty and 'Fecha' in df_movimientos_total.columns:
     df_movimientos_total['Fecha'] = df_movimientos_total['Fecha'].astype(str)
-    df_hoy = df_movimientos_total[df_movimientos_total['Fecha'] == hoy]
-else:
-    df_hoy = pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
 
 # --- NAVEGACIÓN POR PESTAÑAS ---
-tab_operaciones, tab_saldos = st.tabs(["📝 Operaciones del Día", "📊 Estado de Cuenta (Saldos que Deben)"])
+tab_operaciones, tab_saldos = st.tabs(["📝 Operaciones y Cuadre por Fecha", "📊 Estado de Cuenta (Saldos que Deben)"])
 
 with tab_operaciones:
+    # Selector de fecha para registrar o consultar cualquier día
+    st.sidebar.header("📅 Control de Fecha")
+    fecha_seleccionada = st.sidebar.date_input("Selecciona el día a registrar/consultar", date.today())
+    fecha_str = fecha_seleccionada.strftime("%Y-%m-%d")
+    
+    st.info(f"📌 Estás operando en la fecha: **{fecha_str}**")
+
+    # Filtrar movimientos de la fecha seleccionada
+    if not df_movimientos_total.empty and 'Fecha' in df_movimientos_total.columns:
+        df_fecha = df_movimientos_total[df_movimientos_total['Fecha'] == fecha_str]
+    else:
+        df_fecha = pd.DataFrame(columns=['Fecha', 'Tipo', 'Cliente_Concepto', 'Monto', 'Metodo', 'Interes_Pct', 'Total_Deuda'])
+
     # --- MENÚ LATERAL: DIRECTORIO DE CLIENTES ---
     with st.sidebar:
+        st.divider()
         st.header("👥 Nuevo Cliente")
         nuevo_cliente = st.text_input("Nombre completo")
         if st.button("Guardar Cliente"):
@@ -105,7 +115,7 @@ with tab_operaciones:
             st.dataframe(pd.DataFrame(lista_clientes, columns=["Nombre"]), hide_index=True)
 
     # --- 1. FORMULARIO DE INGRESO ---
-    st.header("1. Registrar Movimiento")
+    st.header(f"1. Registrar Movimiento para el día: {fecha_str}")
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -136,13 +146,13 @@ with tab_operaciones:
         total_deuda_generada = monto + (monto * (interes_pct / 100.0))
         st.write(f"➡️ **Total que el cliente pagará:** ${total_deuda_generada:.2f}")
 
-    # Validación de efectivo en caja
-    base_inicial_temp = st.session_state.get('base_input', 0.0)
+    # Validación de efectivo en caja para esa fecha
+    base_inicial_temp = st.session_state.get(f'base_input_{fecha_str}', 0.0)
     total_cobrado_temp = 0.0
     total_salidas_temp = 0.0
 
-    if not df_hoy.empty and 'Metodo' in df_hoy.columns:
-        df_efec_temp = df_hoy[df_hoy['Metodo'] == 'Efectivo']
+    if not df_fecha.empty and 'Metodo' in df_fecha.columns:
+        df_efec_temp = df_fecha[df_fecha['Metodo'] == 'Efectivo']
         total_cobrado_temp = float(df_efec_temp[df_efec_temp['Tipo'] == 'Cobro']['Monto'].sum()) if not df_efec_temp.empty else 0.0
         total_salidas_temp = float(df_efec_temp[df_efec_temp['Tipo'].isin(['Préstamo', 'Gasto'])]['Monto'].sum()) if not df_efec_temp.empty else 0.0
 
@@ -151,11 +161,10 @@ with tab_operaciones:
     if st.button("Registrar Operación", type="primary"):
         if cliente_concepto and monto > 0:
             if metodo == 'Efectivo' and tipo in ['Préstamo', 'Gasto'] and monto > efectivo_disponible_actual:
-                st.error(f"❌ Fondos insuficientes en caja. Tienes ${efectivo_disponible_actual:.2f} disponibles.")
+                st.error(f"❌ Fondos insuficientes en caja para esta fecha. Tienes ${efectivo_disponible_actual:.2f} disponibles.")
             else:
-                fecha_hoy = date.today().strftime("%Y-%m-%d")
                 ws_movimientos.append_row([
-                    str(fecha_hoy), 
+                    str(fecha_str), 
                     str(tipo), 
                     str(cliente_concepto), 
                     float(monto), 
@@ -163,50 +172,49 @@ with tab_operaciones:
                     float(interes_pct if tipo == "Préstamo" else 0.0), 
                     float(total_deuda_generada if tipo == "Préstamo" else 0.0)
                 ])
-                st.success("✅ ¡Operación guardada en Google Sheets con éxito!")
+                st.success(f"✅ ¡Operación guardada en Google Sheets para el {fecha_str}!")
                 st.rerun()
         else:
             st.error("Completa todos los campos correctamente.")
 
-    # --- 2. MOVIMIENTOS DEL DÍA DIVIDIDOS ---
-    st.header("2. Movimientos del Día (Organizados)")
+    # --- 2. MOVIMIENTOS DIVIDIDOS DE LA FECHA SELECCIONADA ---
+    st.header(f"2. Movimientos del día {fecha_str} (Organizados)")
 
-    if not df_hoy.empty:
-        # Pestañas secundarias para separar las tablas visualmente
+    if not df_fecha.empty:
         sub_cobros, sub_prestamos, sub_gastos = st.tabs(["🟢 Cobros Realizados", "🔴 Préstamos Entregados", "🟡 Gastos del Día"])
 
         with sub_cobros:
-            df_cobros = df_hoy[df_hoy['Tipo'] == 'Cobro']
+            df_cobros = df_fecha[df_fecha['Tipo'] == 'Cobro']
             if not df_cobros.empty:
-                st.dataframe(df_cobros[['Fecha', 'Cliente_Concepto', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
-                st.metric("Total Cobrado Hoy", f"${df_cobros['Monto'].sum():.2f}")
+                st.dataframe(df_cobros[['Cliente_Concepto', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
+                st.metric("Total Cobrado", f"${df_cobros['Monto'].sum():.2f}")
             else:
-                st.info("No hay cobros registrados hoy.")
+                st.info("No hay cobros registrados en esta fecha.")
 
         with sub_prestamos:
-            df_prestamos = df_hoy[df_hoy['Tipo'] == 'Préstamo']
+            df_prestamos = df_fecha[df_fecha['Tipo'] == 'Préstamo']
             if not df_prestamos.empty:
-                st.dataframe(df_prestamos[['Fecha', 'Cliente_Concepto', 'Monto', 'Interes_Pct', 'Total_Deuda', 'Metodo']], use_container_width=True, hide_index=True)
-                st.metric("Total Prestado Hoy (Capital)", f"${df_prestamos['Monto'].sum():.2f}")
+                st.dataframe(df_prestamos[['Cliente_Concepto', 'Monto', 'Interes_Pct', 'Total_Deuda', 'Metodo']], use_container_width=True, hide_index=True)
+                st.metric("Total Prestado (Capital)", f"${df_prestamos['Monto'].sum():.2f}")
             else:
-                st.info("No hay préstamos registrados hoy.")
+                st.info("No hay préstamos registrados en esta fecha.")
 
         with sub_gastos:
-            df_gastos = df_hoy[df_hoy['Tipo'] == 'Gasto']
+            df_gastos = df_fecha[df_fecha['Tipo'] == 'Gasto']
             if not df_gastos.empty:
-                st.dataframe(df_gastos[['Fecha', 'Cliente_Concepto', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
-                st.metric("Total Gastado Hoy", f"${df_gastos['Monto'].sum():.2f}")
+                st.dataframe(df_gastos[['Cliente_Concepto', 'Monto', 'Metodo']], use_container_width=True, hide_index=True)
+                st.metric("Total Gastado", f"${df_gastos['Monto'].sum():.2f}")
             else:
-                st.info("No hay gastos registrados hoy.")
+                st.info("No hay gastos registrados en esta fecha.")
     else:
-        st.info("No hay movimientos registrados para el día de hoy.")
+        st.info(f"No hay movimientos registrados para la fecha {fecha_str}.")
 
     # --- 3. CUADRE DE CAJA ---
-    st.header("3. Cuadre de Caja Físico")
-    base_inicial = st.number_input("Efectivo de Salida (Base Inicial):", min_value=0.0, step=1.0, key='base_input')
+    st.header(f"3. Cuadre de Caja Físico ({fecha_str})")
+    base_inicial = st.number_input("Efectivo de Salida (Base Inicial):", min_value=0.0, step=1.0, key=f'base_input_{fecha_str}')
 
-    if not df_hoy.empty and 'Metodo' in df_hoy.columns:
-        df_efectivo = df_hoy[df_hoy['Metodo'] == 'Efectivo']
+    if not df_fecha.empty and 'Metodo' in df_fecha.columns:
+        df_efectivo = df_fecha[df_fecha['Metodo'] == 'Efectivo']
         
         try:
             total_cobrado = float(df_efectivo[df_efectivo['Tipo'] == 'Cobro']['Monto'].sum()) if not df_efectivo.empty else 0.0
@@ -236,8 +244,8 @@ with tab_operaciones:
         colE.metric("EFECTIVO ESPERADO", f"${base_inicial:.2f}")
 
 with tab_saldos:
-    st.header("📊 Estado de Cuenta Actualizado por Cliente")
-    st.write("Aquí puedes ver exactamente cuánto debe cada cliente en total (incluyendo intereses) menos sus abonos.")
+    st.header("📊 Estado de Cuenta Actualizado por Cliente (Histórico Total)")
+    st.write("Esta tabla calcula la deuda global de cada cliente sumando **todos sus préstamos con interés** y restando **todos sus abonos históricos**, sin importar de qué fecha sean.")
 
     if not df_movimientos_total.empty and len(lista_clientes) > 0:
         resumen_clientes = []
