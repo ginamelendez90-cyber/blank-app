@@ -10,12 +10,13 @@ if "creditos" not in st.session_state:
     st.session_state.creditos = []
 
 if "pagos" not in st.session_state:
-    # DataFrame para llevar el registro detallado de cada cuota/día pagado
+    # DataFrame para llevar el registro detallado de cada cuota/día y sus abonos
     st.session_state.pagos = pd.DataFrame(
         columns=[
             "ID_Credito",
             "Cuota_N",
             "Monto_Cuota",
+            "Monto_Pagado",
             "Estado",
             "Metodo_Pago",
             "Fecha_Pago",
@@ -39,7 +40,6 @@ menu = st.sidebar.selectbox(
 if menu == "Registrar Nuevo Crédito":
     st.header("📝 Registrar Nuevo Crédito")
 
-    # Verificar si hay créditos activos del cliente para avisar
     creditos_activos = [
         c for c in st.session_state.creditos if c["Estado"] == "Activo"
     ]
@@ -74,7 +74,6 @@ if menu == "Registrar Nuevo Crédito":
                 id_credito = len(st.session_state.creditos) + 1
                 monto_cuota = monto_total / num_cuotas
 
-                # Guardar el crédito principal
                 nuevo_credito = {
                     "ID": id_credito,
                     "Cliente": nombre_cliente,
@@ -86,7 +85,6 @@ if menu == "Registrar Nuevo Crédito":
                 }
                 st.session_state.creditos.append(nuevo_credito)
 
-                # Generar las cuotas correspondientes en el registro de pagos
                 nuevas_filas = []
                 for i in range(1, int(num_cuotas) + 1):
                     nuevas_filas.append(
@@ -94,6 +92,7 @@ if menu == "Registrar Nuevo Crédito":
                             "ID_Credito": id_credito,
                             "Cuota_N": i,
                             "Monto_Cuota": monto_cuota,
+                            "Monto_Pagado": 0.0,
                             "Estado": "Pendiente",
                             "Metodo_Pago": "N/A",
                             "Fecha_Pago": "N/A",
@@ -124,7 +123,6 @@ elif menu == "Panel de Cobros y Pagos":
     if not creditos_activos:
         st.info("No hay créditos activos en este momento. Crea uno nuevo.")
     else:
-        # Seleccionar crédito activo
         opciones_credito = {
             f"Crédito #{c['ID']} - {c['Cliente']} (Debe: {c['Monto_Total']})": c[
                 "ID"
@@ -136,67 +134,93 @@ elif menu == "Panel de Cobros y Pagos":
         )
         id_activo = opciones_credito[credito_seleccionado_str]
 
-        # Obtener datos del crédito
         credito_info = next(
             c for c in st.session_state.creditos if c["ID"] == id_activo
         )
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Cliente", credito_info["Cliente"])
-        col2.metric("Monto Total", f"${credito_info['Monto_Total']:.2f}")
-        col3.metric(
-            "Valor por Cuota", f"${credito_info['Cuota_Valor']:.2f}"
-        )
-
-        st.markdown("---")
-        st.subheader("📋 Registro de Cuotas")
-
-        # Filtrar pagos de este crédito
+        # Calcular total pagado vs total pendiente
         df_pagos_credito = st.session_state.pagos[
             st.session_state.pagos["ID_Credito"] == id_activo
         ]
+        total_abonado = df_pagos_credito["Monto_Pagado"].sum()
+        saldo_restante = credito_info["Monto_Total"] - total_abonado
 
-        # Mostrar tabla interactiva de pagos
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Cliente", credito_info["Cliente"])
+        col2.metric("Total Deuda", f"${credito_info['Monto_Total']:.2f}")
+        col3.metric("Abonado", f"${total_abonado:.2f}")
+        col4.metric("Saldo Restante", f"${saldo_restante:.2f}")
+
+        st.markdown("---")
+        st.subheader("📋 Estado de Cuotas")
         st.dataframe(df_pagos_credito, use_container_width=True)
 
-        st.markdown("### Registrar un Pago o Abono")
-        with st.form("form_registrar_pago"):
-            # Filtrar solo cuotas pendientes
-            cuotas_pendientes = df_pagos_credito[
-                df_pagos_credito["Estado"] == "Pendiente"
-            ]["Cuota_N"].tolist()
+        st.markdown("### 💸 Registrar Pago o Abono Libre")
+        with st.form("form_registrar_abono"):
+            monto_abono = st.number_input(
+                "Monto del Abono / Pago recibido",
+                min_value=0.01,
+                step=1.0,
+                format="%.2f",
+            )
+            metodo = st.selectbox(
+                "Método de Pago", ["Pago Móvil", "Efectivo", "Binance"]
+            )
+            fecha = st.date_input("Fecha del Pago")
 
-            if cuotas_pendientes:
-                cuota_a_pagar = st.selectbox(
-                    "Seleccione el número de cuota a abonar/pagar",
-                    cuotas_pendientes,
-                )
-                metodo = st.selectbox(
-                    "Método de Pago", ["Pago Móvil", "Efectivo", "Binance"]
-                )
-                fecha = st.date_input("Fecha del Pago")
+            btn_abonar = st.form_submit_button("Aplicar Abono")
 
-                btn_pagar = st.form_submit_button("Registrar Pago")
+            if btn_abonar:
+                # Lógica para distribuir el abono en las cuotas pendientes
+                restante_por_aplicar = monto_abono
+                indices_cuotas = df_pagos_credito.index[
+                    df_pagos_credito["Estado"] != "Pagado"
+                ]
 
-                if btn_pagar:
-                    # Actualizar el estado en el DataFrame global de pagos
-                    idx = st.session_state.pagos[
-                        (st.session_state.pagos["ID_Credito"] == id_activo)
-                        & (st.session_state.pagos["Cuota_N"] == cuota_a_pagar)
-                    ].index
+                if len(indices_cuotas) == 0:
+                    st.warning("⚠️ Este crédito ya está completamente pagado.")
+                else:
+                    for idx in indices_cuotas:
+                        if restante_por_aplicar <= 0:
+                            break
 
-                    st.session_state.pagos.loc[idx, "Estado"] = "Pagado"
-                    st.session_state.pagos.loc[idx, "Metodo_Pago"] = metodo
-                    st.session_state.pagos.loc[idx, "Fecha_Pago"] = str(fecha)
+                        cuota_actual = st.session_state.pagos.loc[idx]
+                        deuda_cuota = (
+                            cuota_actual["Monto_Cuota"]
+                            - cuota_actual["Monto_Pagado"]
+                        )
+
+                        if restante_por_aplicar >= deuda_cuota:
+                            # Cubre toda la cuota actual o la completa
+                            restante_por_aplicar -= deuda_cuota
+                            st.session_state.pagos.loc[idx, "Monto_Pagado"] += (
+                                deuda_cuota
+                            )
+                            st.session_state.pagos.loc[idx, "Estado"] = "Pagado"
+                            st.session_state.pagos.loc[idx, "Metodo_Pago"] = (
+                                metodo
+                            )
+                            st.session_state.pagos.loc[idx, "Fecha_Pago"] = str(
+                                fecha
+                            )
+                        else:
+                            # Es un abono parcial a esta cuota
+                            st.session_state.pagos.loc[idx, "Monto_Pagado"] += (
+                                restante_por_aplicar
+                            )
+                            st.session_state.pagos.loc[idx, "Estado"] = "Abonado"
+                            st.session_state.pagos.loc[idx, "Metodo_Pago"] = (
+                                metodo
+                            )
+                            st.session_state.pagos.loc[idx, "Fecha_Pago"] = str(
+                                fecha
+                            )
+                            restante_por_aplicar = 0
 
                     st.success(
-                        f"✅ Cuota #{cuota_a_pagar} registrada como PAGADA vía {metodo}."
+                        f"✅ Abono de ${monto_abono:.2f} registrado con éxito vía {metodo}."
                     )
                     st.rerun()
-            else:
-                st.success(
-                    "🎉 ¡Todas las cuotas de este crédito han sido pagadas!"
-                )
 
         st.markdown("---")
         # Sección para cerrar el crédito
@@ -204,7 +228,7 @@ elif menu == "Panel de Cobros y Pagos":
         pendientes_restantes = len(
             st.session_state.pagos[
                 (st.session_state.pagos["ID_Credito"] == id_activo)
-                & (st.session_state.pagos["Estado"] == "Pendiente")
+                & (st.session_state.pagos["Estado"] != "Pagado")
             ]
         )
 
@@ -219,7 +243,7 @@ elif menu == "Panel de Cobros y Pagos":
                 st.rerun()
         else:
             st.warning(
-                f"Aún quedan {pendientes_restantes} cuotas pendientes. Si deseas cerrarlo por fuerza mayor, haz clic abajo:"
+                f"Aún hay cuotas pendientes o con saldo incompleto. Saldo restante: ${saldo_restante:.2f}"
             )
             if st.button("Forzar Cierre de Crédito"):
                 for c in st.session_state.creditos:
