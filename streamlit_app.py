@@ -266,75 +266,74 @@ elif menu == "Panel de Cobros y Pagos":
 elif menu == "Historial de Pagos del Día":
     st.header("📅 Historial de Pagos del Día a Día")
 
-    # Filtrar solo los registros que tienen un pago realizado (Monto_Pagado > 0)
-    df_pagados = st.session_state.pagos[
+    df_pagos = st.session_state.pagos[
         st.session_state.pagos["Monto_Pagado"] > 0
     ].copy()
 
-    if df_pagos_credito.empty if "df_pagos_credito" in locals() else df_pagados.empty:
+    if df_pagos.empty:
         st.info("No hay pagos o abonos registrados todavía.")
     else:
-        # Cruce para mostrar el nombre del cliente en el historial de pagos
         df_creditos_temp = pd.DataFrame(st.session_state.creditos)[
             ["ID", "Cliente"]
         ]
-        df_historial = df_pagados.merge(
+        df_historial = df_pagos.merge(
             df_creditos_temp, left_on="ID_Credito", right_on="ID", how="left"
         )
 
-        # Selector de fecha específica o ver todos
-fechas_disponibles = sorted(df_historial["Fecha_Pago"].unique().tolist())
-if "N/A" in fechas_disponibles:
-    fechas_disponibles.remove("N/A")
+        fechas_disponibles = sorted(
+            df_historial["Fecha_Pago"].unique().tolist()
+        )
+        if "N/A" in fechas_disponibles:
+            fechas_disponibles.remove("N/A")
 
-if not fechas_disponibles:
-    st.info("No hay fechas de pago válidas registradas.")
-else:
-    fecha_seleccionada = st.selectbox(
-        "Seleccionar Fecha de Cobro", fechas_disponibles
-    )
+        if not fechas_disponibles:
+            st.info("No hay fechas de pago válidas registradas.")
+        else:
+            fecha_seleccionada = st.selectbox(
+                "Seleccionar Fecha de Cobro", fechas_disponibles
+            )
 
-    df_filtrado_fecha = df_historial[
-        df_historial["Fecha_Pago"] == fecha_seleccionada
-    ]
+            df_filtrado_fecha = df_historial[
+                df_historial["Fecha_Pago"] == fecha_seleccionada
+            ]
 
-    # Calcular totales por método de pago para el día seleccionado
-    total_efectivo = df_filtrado_fecha[
-        df_filtrado_fecha["Metodo_Pago"] == "Efectivo"
-    ]["Monto_Pagado"].sum()
-    total_pago_movil = df_filtrado_fecha[
-        df_filtrado_fecha["Metodo_Pago"] == "Pago Móvil"
-    ]["Monto_Pagado"].sum()
-    total_binance = df_filtrado_fecha[
-        df_filtrado_fecha["Metodo_Pago"] == "Binance"
-    ]["Monto_Pagado"].sum()
-    total_dia = (
-        total_efectivo + total_pago_movil + total_binance
-    )
+            total_efectivo = df_filtrado_fecha[
+                df_filtrado_fecha["Metodo_Pago"] == "Efectivo"
+            ]["Monto_Pagado"].sum()
+            total_pago_movil = df_filtrado_fecha[
+                df_filtrado_fecha["Metodo_Pago"] == "Pago Móvil"
+            ]["Monto_Pagado"].sum()
+            total_binance = df_filtrado_fecha[
+                df_filtrado_fecha["Metodo_Pago"] == "Binance"
+            ]["Monto_Pagado"].sum()
+            total_dia = (
+                total_efectivo + total_pago_movil + total_binance
+            )
 
-    st.subheader(f"Resumen de Cobros para el día: {fecha_seleccionada}")
+            st.subheader(
+                f"Resumen de Cobros para el día: {fecha_seleccionada}"
+            )
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💵 Efectivo", f"${total_efectivo:.2f}")
-    col2.metric("📱 Pago Móvil", f"${total_pago_movil:.2f}")
-    col3.metric("🪙 Binance", f"${total_binance:.2f}")
-    col4.metric("📈 Total Día", f"${total_dia:.2f}")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("💵 Efectivo", f"${total_efectivo:.2f}")
+            col2.metric("📱 Pago Móvil", f"${total_pago_movil:.2f}")
+            col3.metric("🪙 Binance", f"${total_binance:.2f}")
+            col4.metric("📈 Total Día", f"${total_dia:.2f}")
 
-    st.markdown("---")
-    st.subheader("Detalle de transacciones de la fecha")
+            st.markdown("---")
+            st.subheader("Detalle de transacciones de la fecha")
 
-    # Limpiar columnas para mostrar una tabla amigable
-    df_mostrar = df_filtrado_fecha[
-        [
-            "ID_Credito",
-            "Cliente",
-            "Cuota_N",
-            "Monto_Pagado",
-            "Metodo_Pago",
-            "Estado",
-        ]
-    ]
-    st.dataframe(df_mostrar, use_container_width=True)
+            df_mostrar = df_filtrado_fecha[
+                [
+                    "ID_Credito",
+                    "Cliente",
+                    "Cuota_N",
+                    "Monto_Pagado",
+                    "Metodo_Pago",
+                    "Estado",
+                ]
+            ]
+            st.dataframe(df_mostrar, use_container_width=True)
 
 # ---------------------------------------------------------
 # 4. HISTORIAL Y CRÉDITOS CERRADOS
