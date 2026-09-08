@@ -10,7 +10,6 @@ st.set_page_config(
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 
-# Función para cargar datos desde Google Sheets con manejo de hojas vacías
 def cargar_datos(worksheet_name, columnas_por_defecto):
     try:
         df = conn.read(worksheet=worksheet_name, ttl=0)
@@ -21,7 +20,7 @@ def cargar_datos(worksheet_name, columnas_por_defecto):
         return pd.DataFrame(columns=columnas_por_defecto)
 
 
-# Inicializar o sincronizar datos de Google Sheets en la sesión
+# Inicializar o sincronizar datos en la sesión
 if "creditos" not in st.session_state:
     st.session_state.creditos = cargar_datos(
         "creditos",
@@ -65,7 +64,6 @@ if "transacciones" not in st.session_state:
     )
 
 
-# Función para sincronizar y guardar cambios en Google Sheets
 def guardar_en_sheets():
     try:
         conn.update(
@@ -102,10 +100,10 @@ if menu == "Registrar Nuevo Crédito":
     ]
     if creditos_activos:
         st.warning(
-            "⚠️ Hay un crédito activo actualmente. Recuerda cerrarlo si vas a otorgar uno nuevo al mismo cliente."
+            "⚠️ Hay un crédito activo actualmente. Recuerda cerrarlo si vas a otorgar uno nuevo."
         )
 
-    with st.form("form_credito"):
+    with st.form("form_credito", clear_on_submit=True):
         nombre_cliente = st.text_input("Nombre del Cliente")
         monto_total = st.number_input(
             "Monto Total a Deber (con intereses)",
@@ -113,7 +111,6 @@ if menu == "Registrar Nuevo Crédito":
             step=10.0,
             format="%.2f",
         )
-
         modalidad = st.selectbox("Modalidad de Cobro", ["Diario", "Semanal"])
 
         if modalidad == "Diario":
@@ -170,11 +167,9 @@ if menu == "Registrar Nuevo Crédito":
                     [st.session_state.pagos, df_nuevos_pagos], ignore_index=True
                 )
 
-                # Guardar cambios permanentemente en Google Sheets
                 guardar_en_sheets()
-
                 st.success(
-                    f"✅ ¡Crédito #{id_credito} creado y guardado en Google Sheets para {nombre_cliente}!"
+                    f"✅ ¡Crédito #{id_credito} creado y guardado con éxito para {nombre_cliente}!"
                 )
             else:
                 st.error("Por favor completa todos los campos correctamente.")
@@ -224,7 +219,7 @@ elif menu == "Panel de Cobros y Pagos":
         st.dataframe(df_pagos_credito, use_container_width=True)
 
         st.markdown("### 💸 Registrar Pago o Abono Libre")
-        with st.form("form_registrar_abono"):
+        with st.form("form_registrar_abono", clear_on_submit=True):
             monto_abono = st.number_input(
                 "Monto del Abono / Pago recibido",
                 min_value=0.01,
@@ -298,13 +293,10 @@ elif menu == "Panel de Cobros y Pagos":
                         ignore_index=True,
                     )
 
-                    # Guardar cambios en Google Sheets
                     guardar_en_sheets()
-
                     st.success(
-                        f"✅ Abono de ${monto_abono:.2f} registrado y respaldado en Google Sheets."
+                        f"✅ Abono de ${monto_abono:.2f} registrado con éxito y respaldado."
                     )
-                    st.rerun()
 
         st.markdown("---")
         st.subheader("🔒 Cerrar Crédito")
@@ -321,10 +313,7 @@ elif menu == "Panel de Cobros y Pagos":
                     if c["ID"] == id_activo:
                         c["Estado"] = "Cerrado"
                 guardar_en_sheets()
-                st.success(
-                    "🔒 El crédito se ha cerrado correctamente en Google Sheets."
-                )
-                st.rerun()
+                st.success("🔒 El crédito se ha cerrado correctamente.")
         else:
             if st.button("Forzar Cierre de Crédito"):
                 for c in st.session_state.creditos:
@@ -332,7 +321,6 @@ elif menu == "Panel de Cobros y Pagos":
                         c["Estado"] = "Cerrado"
                 guardar_en_sheets()
                 st.warning("⚠️ Crédito cerrado manualmente con deudas.")
-                st.rerun()
 
 # ---------------------------------------------------------
 # 3. HISTORIAL DE PAGOS DEL DÍA A DÍA
