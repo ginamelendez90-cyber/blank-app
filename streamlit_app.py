@@ -62,18 +62,28 @@ if menu == "Registrar Nuevo Crédito":
 
         modalidad = st.selectbox("Modalidad de Cobro", ["Diario", "Semanal"])
 
+        # Campo dinámico para escoger la cantidad exacta de días o semanas
         if modalidad == "Diario":
-            plazo_dias = st.selectbox("Plazo en Días", [24, 30])
-            num_cuotas = plazo_dias
+            num_cuotas = st.number_input(
+                "Cantidad de Días de Pago",
+                min_value=1,
+                max_value=365,
+                value=24,
+                step=1,
+            )
         else:
             num_cuotas = st.number_input(
-                "Cantidad de Semanas", min_value=1, max_value=52, value=4
+                "Cantidad de Semanas de Pago",
+                min_value=1,
+                max_value=52,
+                value=4,
+                step=1,
             )
 
         submit = st.form_submit_button("Crear Crédito")
 
         if submit:
-            if nombre_cliente and monto_total > 0:
+            if nombre_cliente and monto_total > 0 and num_cuotas > 0:
                 id_credito = len(st.session_state.creditos) + 1
                 monto_cuota = monto_total / num_cuotas
 
@@ -108,7 +118,7 @@ if menu == "Registrar Nuevo Crédito":
                 )
 
                 st.success(
-                    f"✅ ¡Crédito #{id_credito} creado con éxito para {nombre_cliente}!"
+                    f"✅ ¡Crédito #{id_credito} creado con éxito para {nombre_cliente} ({num_cuotas} {'días' if modalidad == 'Diario' else 'semanas'})!"
                 )
             else:
                 st.error("Por favor completa todos los campos correctamente.")
