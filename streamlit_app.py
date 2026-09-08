@@ -1,17 +1,45 @@
 import pandas as pd
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 
 st.set_page_config(
     page_title="Control de Créditos y Cobros", page_icon="💰", layout="wide"
 )
 
-# Inicializar la base de datos simulada en la sesión
+# Conectar a Google Sheets
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+
+# Función para cargar datos desde Google Sheets con manejo de hojas vacías
+def cargar_datos(worksheet_name, columnas_por_defecto):
+    try:
+        df = conn.read(worksheet=worksheet_name, ttl=0)
+        if df.empty or len(df.columns) == 0:
+            return pd.DataFrame(columns=columnas_por_defecto)
+        return df
+    except Exception:
+        return pd.DataFrame(columns=columnas_por_defecto)
+
+
+# Inicializar o sincronizar datos de Google Sheets en la sesión
 if "creditos" not in st.session_state:
-    st.session_state.creditos = []
+    st.session_state.creditos = cargar_datos(
+        "creditos",
+        [
+            "ID",
+            "Cliente",
+            "Monto_Total",
+            "Modalidad",
+            "Plazo",
+            "Cuota_Valor",
+            "Estado",
+        ],
+    ).to_dict("records")
 
 if "pagos" not in st.session_state:
-    st.session_state.pagos = pd.DataFrame(
-        columns=[
+    st.session_state.pagos = cargar_datos(
+        "pagos",
+        [
             "ID_Credito",
             "Cuota_N",
             "Monto_Cuota",
@@ -19,25 +47,39 @@ if "pagos" not in st.session_state:
             "Estado",
             "Metodo_Pago",
             "Fecha_Pago",
-        ]
+        ],
     )
-else:
     if "Monto_Pagado" not in st.session_state.pagos.columns:
         st.session_state.pagos["Monto_Pagado"] = 0.0
 
-# NUEVO: Historial independiente de transacciones/abonos exactos
 if "transacciones" not in st.session_state:
-    st.session_state.transacciones = pd.DataFrame(
-        columns=[
+    st.session_state.transacciones = cargar_datos(
+        "transacciones",
+        [
             "ID_Credito",
             "Cliente",
             "Monto_Abonado",
             "Metodo_Pago",
             "Fecha_Pago",
-        ]
+        ],
     )
 
-st.title("📊 Sistema de Gestión de Cobros (Diarios y Semanales)")
+
+# Función para sincronizar y guardar cambios en Google Sheets
+def guardar_en_sheets():
+    try:
+        conn.update(
+            worksheet="creditos", data=pd.DataFrame(st.session_state.creditos)
+        )
+        conn.update(worksheet="pagos", data=st.session_state.pagos)
+        conn.update(
+            worksheet="transacciones", data=st.session_state.transacciones
+        )
+    except Exception as e:
+        st.error(f"Error al sincronizar con Google Sheets: {e}")
+
+
+st.title("📊 Sistema de Gestión de Cobros (Conectado a Google Sheets)")
 
 menu = st.sidebar.selectbox(
     "Menú de Navegación",
@@ -128,8 +170,11 @@ if menu == "Registrar Nuevo Crédito":
                     [st.session_state.pagos, df_nuevos_pagos], ignore_index=True
                 )
 
+                # Guardar cambios permanentemente en Google Sheets
+                guardar_en_sheets()
+
                 st.success(
-                    f"✅ ¡Crédito #{id_credito} creado con éxito para {nombre_cliente} ({num_cuotas} {'días' if modalidad == 'Diario' else 'semanas'})!"
+                    f"✅ ¡Crédito #{id_credito} creado y guardado en Google Sheets para {nombre_cliente}!"
                 )
             else:
                 st.error("Por favor completa todos los campos correctamente.")
@@ -237,7 +282,6 @@ elif menu == "Panel de Cobros y Pagos":
                             )
                             restante_por_aplicar = 0
 
-                    # Registrar la transacción exacta en el historial de abonos
                     nueva_transaccion = pd.DataFrame(
                         [
                             {
@@ -254,8 +298,11 @@ elif menu == "Panel de Cobros y Pagos":
                         ignore_index=True,
                     )
 
+                    # Guardar cambios en Google Sheets
+                    guardar_en_sheets()
+
                     st.success(
-                        f"✅ Abono de ${monto_abono:.2f} registrado con éxito vía {metodo}."
+                        f"✅ Abono de ${monto_abono:.2f} registrado y respaldado en Google Sheets."
                     )
                     st.rerun()
 
@@ -273,19 +320,18 @@ elif menu == "Panel de Cobros y Pagos":
                 for c in st.session_state.creditos:
                     if c["ID"] == id_activo:
                         c["Estado"] = "Cerrado"
+                guardar_en_sheets()
                 st.success(
-                    "🔒 El crédito se ha cerrado correctamente. ¡Ya puedes abrir uno nuevo!"
+                    "🔒 El crédito se ha cerrado correctamente en Google Sheets."
                 )
                 st.rerun()
         else:
-            st.warning(
-                f"Aún hay cuotas pendientes o con saldo incompleto. Saldo restante: ${saldo_restante:.2f}"
-            )
             if st.button("Forzar Cierre de Crédito"):
                 for c in st.session_state.creditos:
                     if c["ID"] == id_activo:
                         c["Estado"] = "Cerrado"
-                st.warning("⚠️ Crédito cerrado manualmente con deudas pendientes.")
+                guardar_en_sheets()
+                st.warning("⚠️ Crédito cerrado manualmente con deudas.")
                 st.rerun()
 
 # ---------------------------------------------------------
@@ -300,9 +346,8 @@ elif menu == "Historial de Pagos del Día":
         fechas_disponibles = sorted(
             st.session_state.transacciones["Fecha_Pago"].unique().tolist()
         )
-
         if not fechas_disponibles:
-            st.info("No hay fechas de pago válidas registradas.")
+            st.info("No hay fechas de pago válidas.")
         else:
             fecha_seleccionada = st.selectbox(
                 "Seleccionar Fecha de Cobro", fechas_disponibles
@@ -329,7 +374,6 @@ elif menu == "Historial de Pagos del Día":
             st.subheader(
                 f"Resumen de Cobros para el día: {fecha_seleccionada}"
             )
-
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("💵 Efectivo", f"${total_efectivo:.2f}")
             col2.metric("📱 Pago Móvil", f"${total_pago_movil:.2f}")
@@ -338,7 +382,6 @@ elif menu == "Historial de Pagos del Día":
 
             st.markdown("---")
             st.subheader("Detalle de transacciones de la fecha")
-
             st.dataframe(df_filtrado_fecha, use_container_width=True)
 
 # ---------------------------------------------------------
