@@ -10,7 +10,6 @@ if "creditos" not in st.session_state:
     st.session_state.creditos = []
 
 if "pagos" not in st.session_state:
-    # DataFrame para llevar el registro detallado de cada cuota/día y sus abonos
     st.session_state.pagos = pd.DataFrame(
         columns=[
             "ID_Credito",
@@ -22,6 +21,10 @@ if "pagos" not in st.session_state:
             "Fecha_Pago",
         ]
     )
+else:
+    # Validación automática por si tenías una sesión vieja guardada
+    if "Monto_Pagado" not in st.session_state.pagos.columns:
+        st.session_state.pagos["Monto_Pagado"] = 0.0
 
 st.title("📊 Sistema de Gestión de Cobros (Diarios y Semanales)")
 
@@ -138,7 +141,6 @@ elif menu == "Panel de Cobros y Pagos":
             c for c in st.session_state.creditos if c["ID"] == id_activo
         )
 
-        # Calcular total pagado vs total pendiente
         df_pagos_credito = st.session_state.pagos[
             st.session_state.pagos["ID_Credito"] == id_activo
         ]
@@ -171,7 +173,6 @@ elif menu == "Panel de Cobros y Pagos":
             btn_abonar = st.form_submit_button("Aplicar Abono")
 
             if btn_abonar:
-                # Lógica para distribuir el abono en las cuotas pendientes
                 restante_por_aplicar = monto_abono
                 indices_cuotas = df_pagos_credito.index[
                     df_pagos_credito["Estado"] != "Pagado"
@@ -191,7 +192,6 @@ elif menu == "Panel de Cobros y Pagos":
                         )
 
                         if restante_por_aplicar >= deuda_cuota:
-                            # Cubre toda la cuota actual o la completa
                             restante_por_aplicar -= deuda_cuota
                             st.session_state.pagos.loc[idx, "Monto_Pagado"] += (
                                 deuda_cuota
@@ -204,7 +204,6 @@ elif menu == "Panel de Cobros y Pagos":
                                 fecha
                             )
                         else:
-                            # Es un abono parcial a esta cuota
                             st.session_state.pagos.loc[idx, "Monto_Pagado"] += (
                                 restante_por_aplicar
                             )
@@ -223,7 +222,6 @@ elif menu == "Panel de Cobros y Pagos":
                     st.rerun()
 
         st.markdown("---")
-        # Sección para cerrar el crédito
         st.subheader("🔒 Cerrar Crédito")
         pendientes_restantes = len(
             st.session_state.pagos[
