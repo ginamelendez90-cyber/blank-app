@@ -22,9 +22,20 @@ if "pagos" not in st.session_state:
         ]
     )
 else:
-    # Validación automática por si tenías una sesión vieja guardada
     if "Monto_Pagado" not in st.session_state.pagos.columns:
         st.session_state.pagos["Monto_Pagado"] = 0.0
+
+# NUEVO: Historial independiente de transacciones/abonos exactos
+if "transacciones" not in st.session_state:
+    st.session_state.transacciones = pd.DataFrame(
+        columns=[
+            "ID_Credito",
+            "Cliente",
+            "Monto_Abonado",
+            "Metodo_Pago",
+            "Fecha_Pago",
+        ]
+    )
 
 st.title("📊 Sistema de Gestión de Cobros (Diarios y Semanales)")
 
@@ -226,6 +237,23 @@ elif menu == "Panel de Cobros y Pagos":
                             )
                             restante_por_aplicar = 0
 
+                    # Registrar la transacción exacta en el historial de abonos
+                    nueva_transaccion = pd.DataFrame(
+                        [
+                            {
+                                "ID_Credito": id_activo,
+                                "Cliente": credito_info["Cliente"],
+                                "Monto_Abonado": monto_abono,
+                                "Metodo_Pago": metodo,
+                                "Fecha_Pago": str(fecha),
+                            }
+                        ]
+                    )
+                    st.session_state.transacciones = pd.concat(
+                        [st.session_state.transacciones, nueva_transaccion],
+                        ignore_index=True,
+                    )
+
                     st.success(
                         f"✅ Abono de ${monto_abono:.2f} registrado con éxito vía {metodo}."
                     )
@@ -266,25 +294,12 @@ elif menu == "Panel de Cobros y Pagos":
 elif menu == "Historial de Pagos del Día":
     st.header("📅 Historial de Pagos del Día a Día")
 
-    df_pagos = st.session_state.pagos[
-        st.session_state.pagos["Monto_Pagado"] > 0
-    ].copy()
-
-    if df_pagos.empty:
+    if st.session_state.transacciones.empty:
         st.info("No hay pagos o abonos registrados todavía.")
     else:
-        df_creditos_temp = pd.DataFrame(st.session_state.creditos)[
-            ["ID", "Cliente"]
-        ]
-        df_historial = df_pagos.merge(
-            df_creditos_temp, left_on="ID_Credito", right_on="ID", how="left"
-        )
-
         fechas_disponibles = sorted(
-            df_historial["Fecha_Pago"].unique().tolist()
+            st.session_state.transacciones["Fecha_Pago"].unique().tolist()
         )
-        if "N/A" in fechas_disponibles:
-            fechas_disponibles.remove("N/A")
 
         if not fechas_disponibles:
             st.info("No hay fechas de pago válidas registradas.")
@@ -293,19 +308,20 @@ elif menu == "Historial de Pagos del Día":
                 "Seleccionar Fecha de Cobro", fechas_disponibles
             )
 
-            df_filtrado_fecha = df_historial[
-                df_historial["Fecha_Pago"] == fecha_seleccionada
+            df_filtrado_fecha = st.session_state.transacciones[
+                st.session_state.transacciones["Fecha_Pago"]
+                == fecha_seleccionada
             ]
 
             total_efectivo = df_filtrado_fecha[
                 df_filtrado_fecha["Metodo_Pago"] == "Efectivo"
-            ]["Monto_Pagado"].sum()
+            ]["Monto_Abonado"].sum()
             total_pago_movil = df_filtrado_fecha[
                 df_filtrado_fecha["Metodo_Pago"] == "Pago Móvil"
-            ]["Monto_Pagado"].sum()
+            ]["Monto_Abonado"].sum()
             total_binance = df_filtrado_fecha[
                 df_filtrado_fecha["Metodo_Pago"] == "Binance"
-            ]["Monto_Pagado"].sum()
+            ]["Monto_Abonado"].sum()
             total_dia = (
                 total_efectivo + total_pago_movil + total_binance
             )
@@ -323,17 +339,7 @@ elif menu == "Historial de Pagos del Día":
             st.markdown("---")
             st.subheader("Detalle de transacciones de la fecha")
 
-            df_mostrar = df_filtrado_fecha[
-                [
-                    "ID_Credito",
-                    "Cliente",
-                    "Cuota_N",
-                    "Monto_Pagado",
-                    "Metodo_Pago",
-                    "Estado",
-                ]
-            ]
-            st.dataframe(df_mostrar, use_container_width=True)
+            st.dataframe(df_filtrado_fecha, use_container_width=True)
 
 # ---------------------------------------------------------
 # 4. HISTORIAL Y CRÉDITOS CERRADOS
