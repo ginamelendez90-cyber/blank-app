@@ -1,4 +1,6 @@
-streamlit
-pandas
-gspread
-google-auth
+streamlit>=1.35.0
+pandas>=2.0.0
+soccerdata>=1.5.0
+understat>=0.1.5
+scipy>=1.10.0
+requests>=2.31.0
