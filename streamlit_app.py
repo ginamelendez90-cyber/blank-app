@@ -1,388 +1,115 @@
-import pandas as pd
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
+import pandas as pd
+import soccerdata as sd
 
-st.set_page_config(
-    page_title="Control de Créditos y Cobros", page_icon="💰", layout="wide"
-)
+# Configuración de la interfaz en modo ancho
+st.set_page_config(page_title="Football Sabermetrics Analytics", layout="wide", page_icon="⚽")
 
-# Conectar a Google Sheets
-conn = st.connection("gsheets", type=GSheetsConnection)
+st.title("⚽ Sistema Predictivo de Fútbol Profesional (xG Model)")
+st.markdown("---")
 
+# --- CONTROLADORES DE FILTROS ---
+st.sidebar.header("⚙️ Configuración del Modelo")
 
-def cargar_datos(worksheet_name, columnas_por_defecto):
+# Inicializamos el conector de SoccerData usando la fuente de Understat (incluye datos xG gratuitos)
+@st.cache_data(ttl=3600) # Guardamos en caché por 1 hora para no saturar los servidores
+def cargar_datos_futbol():
     try:
-        df = conn.read(worksheet=worksheet_name, ttl=0)
-        if df.empty or len(df.columns) == 0:
-            return pd.DataFrame(columns=columnas_por_defecto)
-        return df
-    except Exception:
-        return pd.DataFrame(columns=columnas_por_defecto)
-
-
-# Inicializar o sincronizar datos en la sesión
-if "creditos" not in st.session_state:
-    st.session_state.creditos = cargar_datos(
-        "creditos",
-        [
-            "ID",
-            "Cliente",
-            "Monto_Total",
-            "Modalidad",
-            "Plazo",
-            "Cuota_Valor",
-            "Estado",
-        ],
-    ).to_dict("records")
-
-if "pagos" not in st.session_state:
-    st.session_state.pagos = cargar_datos(
-        "pagos",
-        [
-            "ID_Credito",
-            "Cuota_N",
-            "Monto_Cuota",
-            "Monto_Pagado",
-            "Estado",
-            "Metodo_Pago",
-            "Fecha_Pago",
-        ],
-    )
-    if "Monto_Pagado" not in st.session_state.pagos.columns:
-        st.session_state.pagos["Monto_Pagado"] = 0.0
-
-if "transacciones" not in st.session_state:
-    st.session_state.transacciones = cargar_datos(
-        "transacciones",
-        [
-            "ID_Credito",
-            "Cliente",
-            "Monto_Abonado",
-            "Metodo_Pago",
-            "Fecha_Pago",
-        ],
-    )
-
-
-def guardar_en_sheets():
-    try:
-        conn.update(
-            worksheet="creditos", data=pd.DataFrame(st.session_state.creditos)
-        )
-        conn.update(worksheet="pagos", data=st.session_state.pagos)
-        conn.update(
-            worksheet="transacciones", data=st.session_state.transacciones
-        )
+        # Extrae datos de las ligas top. Usaremos la Premier League como base
+        understat = sd.Understat(leagues="ENG-Premier League", seasons=2025) 
+        
+        # Obtener el historial de partidos y resultados de la temporada
+        cronograma = understat.read_schedule()
+        return cronograma
     except Exception as e:
-        st.error(f"Error al sincronizar con Google Sheets: {e}")
+        st.error(f"Error al conectar con el servidor de datos: {e}")
+        return pd.DataFrame()
 
+# --- PROCESAMIENTO DE DATOS ---
+df_partidos = cargar_datos_futbol()
 
-st.title("📊 Sistema de Gestión de Cobros (Conectado a Google Sheets)")
+if df_partidos.empty:
+    st.warning("⚠️ No se pudieron recuperar los datos de la liga en este momento.")
+else:
+    # 1. Limpieza rápida: Filtrar solo los partidos que aún NO se han jugado (Pre-Partido)
+    # Understat marca los partidos jugados con goles definidos. Filtramos los pendientes:
+    partidos_pendientes = df_partidos[df_partidos['home_goals'].isna()]
+    
+    if partidos_pendientes.empty:
+        st.info("⚽ Todos los partidos de la temporada actual ya se han jugado. Mostrando últimos encuentros para simulación:")
+        partidos_pendientes = df_partidos.tail(10) # Respaldar con los últimos 10 si la temporada acabó
+    
+    # Crear la lista de selección para el usuario
+    lista_opciones = []
+    for idx, row in partidos_pendientes.iterrows():
+        lista_opciones.append(f"{row['home_team']} vs {row['away_team']} (Fecha: {row['date'].strftime('%Y-%m-%d')})")
+        
+    partido_elegido = st.selectbox("🎯 Selecciona el próximo encuentro que deseas analizar:", lista_opciones)
+    
+    # Extraer los equipos del partido seleccionado
+    match_idx = lista_opciones.index(partido_elegido)
+    fila_partido = partidos_pendientes.iloc[match_idx]
+    equipo_local = fila_partido['home_team']
+    equipo_visitante = fila_partido['away_team']
+    
+    # =========================================================================
+    # 📊 PESTAÑA ÚNICA: ESTUDIO PRE-PARTIDO
+    # =========================================================================
+    st.header(f"🏟️ Análisis de Confrontación: {equipo_local} vs {equipo_visitante}")
+    
+    # 2. CÁLCULO DE MÉTRICAS AVANZADAS (Métricas xG históricas de la temporada)
+    # Calculamos los promedios de Goles Esperados (xG) anotados y concedidos
+    # xG Home anotado
+    xg_anotado_local = df_partidos[df_partidos['home_team'] == equipo_local]['home_xg'].mean()
+    # xG Home recibido
+    xg_concedido_local = df_partidos[df_partidos['home_team'] == equipo_local]['away_xg'].mean()
+    
+    # xG Away anotado
+    xg_anotado_visita = df_partidos[df_partidos['away_team'] == equipo_visitante]['away_xg'].mean()
+    # xG Away recibido
+    xg_concedido_visita = df_partidos[df_partidos['away_team'] == equipo_visitante]['home_xg'].mean()
+    
+    # Promedio de xG general de toda la liga (Línea base)
+    xg_promedio_liga = df_partidos['home_xg'].mean()
+    
+    # Rellenar con valores estándar si es el primer partido del torneo
+    xg_anotado_local = xg_anotado_local if not pd.isna(xg_anotado_local) else 1.35
+    xg_concedido_local = xg_concedido_local if not pd.isna(xg_concedido_local) else 1.20
+    xg_anotado_visita = xg_anotado_visita if not pd.isna(xg_anotado_visita) else 1.15
+    xg_concedido_visita = xg_concedido_visita if not pd.isna(xg_concedido_visita) else 1.40
+    xg_promedio_liga = xg_promedio_liga if not pd.isna(xg_promedio_liga) else 1.25
 
-menu = st.sidebar.selectbox(
-    "Menú de Navegación",
-    [
-        "Registrar Nuevo Crédito",
-        "Panel de Cobros y Pagos",
-        "Historial de Pagos del Día",
-        "Historial y Créditos Cerrados",
-    ],
-)
-
-# ---------------------------------------------------------
-# 1. REGISTRAR NUEVO CRÉDITO
-# ---------------------------------------------------------
-if menu == "Registrar Nuevo Crédito":
-    st.header("📝 Registrar Nuevo Crédito")
-
-    creditos_activos = [
-        c for c in st.session_state.creditos if c["Estado"] == "Activo"
-    ]
-    if creditos_activos:
-        st.warning(
-            "⚠️ Hay un crédito activo actualmente. Recuerda cerrarlo si vas a otorgar uno nuevo."
-        )
-
-    with st.form("form_credito", clear_on_submit=True):
-        nombre_cliente = st.text_input("Nombre del Cliente")
-        monto_total = st.number_input(
-            "Monto Total a Deber (con intereses)",
-            min_value=0.0,
-            step=10.0,
-            format="%.2f",
-        )
-        modalidad = st.selectbox("Modalidad de Cobro", ["Diario", "Semanal"])
-
-        if modalidad == "Diario":
-            num_cuotas = st.number_input(
-                "Cantidad de Días de Pago",
-                min_value=1,
-                max_value=365,
-                value=24,
-                step=1,
-            )
-        else:
-            num_cuotas = st.number_input(
-                "Cantidad de Semanas de Pago",
-                min_value=1,
-                max_value=52,
-                value=4,
-                step=1,
-            )
-
-        submit = st.form_submit_button("Crear Crédito")
-
-        if submit:
-            if nombre_cliente and monto_total > 0 and num_cuotas > 0:
-                id_credito = len(st.session_state.creditos) + 1
-                monto_cuota = monto_total / num_cuotas
-
-                nuevo_credito = {
-                    "ID": id_credito,
-                    "Cliente": nombre_cliente,
-                    "Monto_Total": monto_total,
-                    "Modalidad": modalidad,
-                    "Plazo": num_cuotas,
-                    "Cuota_Valor": monto_cuota,
-                    "Estado": "Activo",
-                }
-                st.session_state.creditos.append(nuevo_credito)
-
-                nuevas_filas = []
-                for i in range(1, int(num_cuotas) + 1):
-                    nuevas_filas.append(
-                        {
-                            "ID_Credito": id_credito,
-                            "Cuota_N": i,
-                            "Monto_Cuota": monto_cuota,
-                            "Monto_Pagado": 0.0,
-                            "Estado": "Pendiente",
-                            "Metodo_Pago": "N/A",
-                            "Fecha_Pago": "N/A",
-                        }
-                    )
-
-                df_nuevos_pagos = pd.DataFrame(nuevas_filas)
-                st.session_state.pagos = pd.concat(
-                    [st.session_state.pagos, df_nuevos_pagos], ignore_index=True
-                )
-
-                guardar_en_sheets()
-                st.success(
-                    f"✅ ¡Crédito #{id_credito} creado y guardado con éxito para {nombre_cliente}!"
-                )
-            else:
-                st.error("Por favor completa todos los campos correctamente.")
-
-# ---------------------------------------------------------
-# 2. PANEL DE COBROS Y PAGOS
-# ---------------------------------------------------------
-elif menu == "Panel de Cobros y Pagos":
-    st.header("💵 Panel de Cobros Diarios y Semanales")
-
-    creditos_activos = [
-        c for c in st.session_state.creditos if c["Estado"] == "Activo"
-    ]
-
-    if not creditos_activos:
-        st.info("No hay créditos activos en este momento. Crea uno nuevo.")
+    # 3. INTERFAZ VISUAL DE MÉTRICAS (Mano a Mano)
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.subheader(f"🏠 Indicadores de {equipo_local} (Local)")
+        st.metric("Peligro Ofensivo (xG Favor Promedio)", f"{xg_anotado_local:.2f}")
+        st.metric("Vulnerabilidad Defensiva (xG Contra Promedio)", f"{xg_concedido_local:.2f}")
+        
+    with c2:
+        st.subheader(f"🚀 Indicadores de {equipo_visitante} (Visitante)")
+        st.metric("Peligro Ofensivo (xG Favor Promedio)", f"{xg_anotado_visita:.2f}")
+        st.metric("Vulnerabilidad Defensiva (xG Contra Promedio)", f"{xg_concedido_visita:.2f}")
+        
+    st.markdown("---")
+    st.header("🧮 4. Proyección de Goles del Partido")
+    st.write("Cálculo predictivo cruzando la Fuerza Ofensiva de un equipo contra la Fuerza Defensiva del oponente.")
+    
+    # Algoritmo de Proyección de Goles Esperados para este partido específico:
+    # Goles Proyectados = (xG de Ataque del Equipo / Promedio de la liga) * xG de Defensa del Rival
+    goles_proyectados_local = (xg_anotado_local / xg_promedio_liga) * xg_concedido_visita
+    goles_proyectados_visita = (xg_anotado_visita / xg_promedio_liga) * xg_concedido_local
+    
+    col_pred1, col_pred2 = st.columns(2)
+    col_pred1.metric(f"Goles Proyectados para {equipo_local}", f"{goles_proyectados_local:.2f}")
+    col_pred2.metric(f"Goles Proyectados para {equipo_visitante}", f"{goles_proyectados_visita:.2f}")
+    
+    # Diagnóstico final del Analista
+    st.subheader("🎯 Diagnóstico del Modelo Predictivo")
+    if goles_proyectados_local > goles_proyectados_visita + 0.4:
+        st.success(f"🟢 **Alta probabilidad de Victoria Local**. El ataque de {equipo_local} supera con creces las carencias defensivas de {equipo_visitante}.")
+    elif goles_proyectados_visita > goles_proyectados_local + 0.4:
+        st.success(f"🔵 **Alta probabilidad de Victoria Visitante**. {equipo_visitante} tiene las métricas de peligro necesarias para asaltar el estadio local.")
     else:
-        opciones_credito = {
-            f"Crédito #{c['ID']} - {c['Cliente']} (Debe: {c['Monto_Total']})": c[
-                "ID"
-            ]
-            for c in creditos_activos
-        }
-        credito_seleccionado_str = st.selectbox(
-            "Seleccione el Crédito a Gestionar", list(opciones_credito.keys())
-        )
-        id_activo = opciones_credito[credito_seleccionado_str]
-
-        credito_info = next(
-            c for c in st.session_state.creditos if c["ID"] == id_activo
-        )
-
-        df_pagos_credito = st.session_state.pagos[
-            st.session_state.pagos["ID_Credito"] == id_activo
-        ]
-        total_abonado = df_pagos_credito["Monto_Pagado"].sum()
-        saldo_restante = credito_info["Monto_Total"] - total_abonado
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Cliente", credito_info["Cliente"])
-        col2.metric("Total Deuda", f"${credito_info['Monto_Total']:.2f}")
-        col3.metric("Abonado", f"${total_abonado:.2f}")
-        col4.metric("Saldo Restante", f"${saldo_restante:.2f}")
-
-        st.markdown("---")
-        st.subheader("📋 Estado de Cuotas")
-        st.dataframe(df_pagos_credito, use_container_width=True)
-
-        st.markdown("### 💸 Registrar Pago o Abono Libre")
-        with st.form("form_registrar_abono", clear_on_submit=True):
-            monto_abono = st.number_input(
-                "Monto del Abono / Pago recibido",
-                min_value=0.01,
-                step=1.0,
-                format="%.2f",
-            )
-            metodo = st.selectbox(
-                "Método de Pago", ["Pago Móvil", "Efectivo", "Binance"]
-            )
-            fecha = st.date_input("Fecha del Pago")
-
-            btn_abonar = st.form_submit_button("Aplicar Abono")
-
-            if btn_abonar:
-                restante_por_aplicar = monto_abono
-                indices_cuotas = df_pagos_credito.index[
-                    df_pagos_credito["Estado"] != "Pagado"
-                ]
-
-                if len(indices_cuotas) == 0:
-                    st.warning("⚠️ Este crédito ya está completamente pagado.")
-                else:
-                    for idx in indices_cuotas:
-                        if restante_por_aplicar <= 0:
-                            break
-
-                        cuota_actual = st.session_state.pagos.loc[idx]
-                        deuda_cuota = (
-                            cuota_actual["Monto_Cuota"]
-                            - cuota_actual["Monto_Pagado"]
-                        )
-
-                        if restante_por_aplicar >= deuda_cuota:
-                            restante_por_aplicar -= deuda_cuota
-                            st.session_state.pagos.loc[idx, "Monto_Pagado"] += (
-                                deuda_cuota
-                            )
-                            st.session_state.pagos.loc[idx, "Estado"] = "Pagado"
-                            st.session_state.pagos.loc[idx, "Metodo_Pago"] = (
-                                metodo
-                            )
-                            st.session_state.pagos.loc[idx, "Fecha_Pago"] = str(
-                                fecha
-                            )
-                        else:
-                            st.session_state.pagos.loc[idx, "Monto_Pagado"] += (
-                                restante_por_aplicar
-                            )
-                            st.session_state.pagos.loc[idx, "Estado"] = "Abonado"
-                            st.session_state.pagos.loc[idx, "Metodo_Pago"] = (
-                                metodo
-                            )
-                            st.session_state.pagos.loc[idx, "Fecha_Pago"] = str(
-                                fecha
-                            )
-                            restante_por_aplicar = 0
-
-                    nueva_transaccion = pd.DataFrame(
-                        [
-                            {
-                                "ID_Credito": id_activo,
-                                "Cliente": credito_info["Cliente"],
-                                "Monto_Abonado": monto_abono,
-                                "Metodo_Pago": metodo,
-                                "Fecha_Pago": str(fecha),
-                            }
-                        ]
-                    )
-                    st.session_state.transacciones = pd.concat(
-                        [st.session_state.transacciones, nueva_transaccion],
-                        ignore_index=True,
-                    )
-
-                    guardar_en_sheets()
-                    st.success(
-                        f"✅ Abono de ${monto_abono:.2f} registrado con éxito y respaldado."
-                    )
-
-        st.markdown("---")
-        st.subheader("🔒 Cerrar Crédito")
-        pendientes_restantes = len(
-            st.session_state.pagos[
-                (st.session_state.pagos["ID_Credito"] == id_activo)
-                & (st.session_state.pagos["Estado"] != "Pagado")
-            ]
-        )
-
-        if pendientes_restantes == 0:
-            if st.button("Cerrar Crédito Finalizado"):
-                for c in st.session_state.creditos:
-                    if c["ID"] == id_activo:
-                        c["Estado"] = "Cerrado"
-                guardar_en_sheets()
-                st.success("🔒 El crédito se ha cerrado correctamente.")
-        else:
-            if st.button("Forzar Cierre de Crédito"):
-                for c in st.session_state.creditos:
-                    if c["ID"] == id_activo:
-                        c["Estado"] = "Cerrado"
-                guardar_en_sheets()
-                st.warning("⚠️ Crédito cerrado manualmente con deudas.")
-
-# ---------------------------------------------------------
-# 3. HISTORIAL DE PAGOS DEL DÍA A DÍA
-# ---------------------------------------------------------
-elif menu == "Historial de Pagos del Día":
-    st.header("📅 Historial de Pagos del Día a Día")
-
-    if st.session_state.transacciones.empty:
-        st.info("No hay pagos o abonos registrados todavía.")
-    else:
-        fechas_disponibles = sorted(
-            st.session_state.transacciones["Fecha_Pago"].unique().tolist()
-        )
-        if not fechas_disponibles:
-            st.info("No hay fechas de pago válidas.")
-        else:
-            fecha_seleccionada = st.selectbox(
-                "Seleccionar Fecha de Cobro", fechas_disponibles
-            )
-
-            df_filtrado_fecha = st.session_state.transacciones[
-                st.session_state.transacciones["Fecha_Pago"]
-                == fecha_seleccionada
-            ]
-
-            total_efectivo = df_filtrado_fecha[
-                df_filtrado_fecha["Metodo_Pago"] == "Efectivo"
-            ]["Monto_Abonado"].sum()
-            total_pago_movil = df_filtrado_fecha[
-                df_filtrado_fecha["Metodo_Pago"] == "Pago Móvil"
-            ]["Monto_Abonado"].sum()
-            total_binance = df_filtrado_fecha[
-                df_filtrado_fecha["Metodo_Pago"] == "Binance"
-            ]["Monto_Abonado"].sum()
-            total_dia = (
-                total_efectivo + total_pago_movil + total_binance
-            )
-
-            st.subheader(
-                f"Resumen de Cobros para el día: {fecha_seleccionada}"
-            )
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("💵 Efectivo", f"${total_efectivo:.2f}")
-            col2.metric("📱 Pago Móvil", f"${total_pago_movil:.2f}")
-            col3.metric("🪙 Binance", f"${total_binance:.2f}")
-            col4.metric("📈 Total Día", f"${total_dia:.2f}")
-
-            st.markdown("---")
-            st.subheader("Detalle de transacciones de la fecha")
-            st.dataframe(df_filtrado_fecha, use_container_width=True)
-
-# ---------------------------------------------------------
-# 4. HISTORIAL Y CRÉDITOS CERRADOS
-# ---------------------------------------------------------
-elif menu == "Historial y Créditos Cerrados":
-    st.header("📂 Historial General de Créditos")
-
-    if not st.session_state.creditos:
-        st.info("No hay registros de créditos creados.")
-    else:
-        df_creditos = pd.DataFrame(st.session_state.creditos)
-        st.dataframe(df_creditos, use_container_width=True)
-
-        st.subheader("Detalle completo de todas las cuotas")
-        st.dataframe(st.session_state.pagos, use_container_width=True)
+        st.warning("🟡 **Tendencia al Empate o Partido Cerrado**. Las fuerzas están sumamente niveladas en las proyecciones analíticas.")
