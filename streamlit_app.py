@@ -1,20 +1,20 @@
 import os
 import sys
+import streamlit as st
 
 # =========================================================================
-# 🛠️ SISTEMA DE AUTO-INSTALACIÓN DE EMERGENCIA
+# 🛠️ SISTEMA DE AUTO-INSTALACIÓN DE EMERGENCIA (CORREGIDO)
 # =========================================================================
-# Si Streamlit Cloud ignora el archivo requirements.txt, este bloque obliga 
-# al servidor a instalar las librerías necesarias de forma automática.
+# Se ejecuta la importación de streamlit primero para poder usar sus funciones
+# de limpieza de caché de forma segura en caso de que falte alguna librería.
 try:
     import soccerdata as sd
     import scipy
 except ModuleNotFoundError:
     os.system(f'"{sys.executable}" -m pip install soccerdata understat scipy pandas>=2.0.0')
-    st.cache_data.clear() # Limpiar caché para forzar la lectura de módulos nuevos
+    st.cache_data.clear()
 
-# Ahora realizamos las importaciones oficiales de la app
-import streamlit as st
+# Una vez aseguradas las instalaciones, importamos el resto de módulos
 import pandas as pd
 import soccerdata as sd
 from scipy.stats import poisson
@@ -29,8 +29,7 @@ st.markdown("---")
 @st.cache_data(ttl=3600)  # Guarda los datos en caché por 1 hora para máxima velocidad
 def cargar_datos_futbol():
     try:
-        # Extrae datos históricos y proyecciones de la Premier League inglesa (Temporada actual)
-        # Nota: La librería maneja los años en formato corto/largo según la temporada activa.
+        # Extrae datos históricos y proyecciones de la Premier League inglesa
         understat = sd.Understat(leagues="ENG-Premier League", seasons=2026) 
         cronograma = understat.read_schedule()
         return cronograma
@@ -71,7 +70,6 @@ else:
     # =========================================================================
     # 📊 BLOQUE 1: EXTRACCIÓN DE MÉTRICAS SOBERMÉTRICAS (xG)
     # =========================================================================
-    # Calculamos los promedios de Goles Esperados (xG) acumulados en la temporada
     xg_anotado_local = df_partidos[df_partidos['home_team'] == equipo_local]['home_xg'].mean()
     xg_concedido_local = df_partidos[df_partidos['home_team'] == equipo_local]['away_xg'].mean()
     
@@ -103,22 +101,19 @@ else:
     st.markdown("---")
     
     # =========================================================================
-    # 🧮 BLOQUE 2: MOTOR DE PROYECCIÓN Y DISTRIBUCIÓN DE POISSON
+    # 🗂️ BLOQUE 2: MOTOR DE PROYECCIÓN Y DISTRIBUCIÓN DE POISSON
     # =========================================================================
     st.header("🧮 Modelo Matemático Predictivo Avanzado")
     
-    # Cálculo de la expectativa de goles cruzando fuerzas ofensivas y defensivas
     goles_proyectados_local = (xg_anotado_local / xg_promedio_liga) * xg_concedido_visita
     goles_proyectados_visita = (xg_anotado_visita / xg_promedio_liga) * xg_concedido_local
     
-    # Simulación de matriz de Poisson (Hasta un máximo de 6 goles por equipo para el cálculo)
     prob_local = 0.0
     prob_empate = 0.0
     prob_visitante = 0.0
     
     for g_local in range(7):
         for g_visita in range(7):
-            # Probabilidad conjunta de que el partido quede exactamente con ese marcador
             p_marcador = poisson.pmf(g_local, goles_proyectados_local) * poisson.pmf(g_visita, goles_proyectados_visita)
             
             if g_local > g_visita:
@@ -133,14 +128,14 @@ else:
     col_pred1.metric(f"Goles Proyectados para {equipo_local}", f"{goles_proyectados_local:.2f}")
     col_pred2.metric(f"Goles Proyectados para {equipo_visitante}", f"{goles_proyectados_visita:.2f}")
     
-    # Desplegar los porcentajes probabilísticos en tarjetas estilizadas
+    # Porcentajes probabilísticos
     st.markdown("### 🎯 Probabilidades Porcentuales del Resultado Final")
     col_p1, col_p2, col_p3 = st.columns(3)
     col_p1.metric(f"Victoria {equipo_local}", f"{prob_local * 100:.2f}%")
     col_p2.metric("Empate", f"{prob_empate * 100:.2f}%")
     col_p3.metric(f"Victoria {equipo_visitante}", f"{prob_visitante * 100:.2f}%")
     
-    # Diagnóstico descriptivo automático del modelo
+    # Conclusión
     st.markdown("### 📋 Conclusión del Analista")
     if prob_local > prob_visitante and prob_local > prob_empate:
         st.success(f"🟢 El modelo asigna la mayor probabilidad a la **Victoria de {equipo_local}** debido a la consistencia en su generación de xG en casa.")
