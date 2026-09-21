@@ -1,50 +1,63 @@
+import os
+import sys
+
+# =========================================================================
+# 🛠️ SISTEMA DE AUTO-INSTALACIÓN DE EMERGENCIA
+# =========================================================================
+# Si Streamlit Cloud ignora el archivo requirements.txt, este bloque obliga 
+# al servidor a instalar las librerías necesarias de forma automática.
+try:
+    import soccerdata as sd
+    import scipy
+except ModuleNotFoundError:
+    os.system(f'"{sys.executable}" -m pip install soccerdata understat scipy pandas>=2.0.0')
+    st.cache_data.clear() # Limpiar caché para forzar la lectura de módulos nuevos
+
+# Ahora realizamos las importaciones oficiales de la app
 import streamlit as st
 import pandas as pd
 import soccerdata as sd
+from scipy.stats import poisson
 
 # Configuración de la interfaz en modo ancho
-st.set_page_config(page_title="Football Sabermetrics Analytics", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Football Analytics Pro", layout="wide", page_icon="⚽")
 
-st.title("⚽ Sistema Predictivo de Fútbol Profesional (xG Model)")
+st.title("⚽ Sistema Predictivo de Fútbol Profesional (Modelo Poisson & xG)")
 st.markdown("---")
 
-# --- CONTROLADORES DE FILTROS ---
-st.sidebar.header("⚙️ Configuración del Modelo")
-
-# Inicializamos el conector de SoccerData usando la fuente de Understat (incluye datos xG gratuitos)
-@st.cache_data(ttl=3600) # Guardamos en caché por 1 hora para no saturar los servidores
+# --- CONEXIÓN Y CARGA DE DATOS OPTIMIZADA ---
+@st.cache_data(ttl=3600)  # Guarda los datos en caché por 1 hora para máxima velocidad
 def cargar_datos_futbol():
     try:
-        # Extrae datos de las ligas top. Usaremos la Premier League como base
-        understat = sd.Understat(leagues="ENG-Premier League", seasons=2025) 
-        
-        # Obtener el historial de partidos y resultados de la temporada
+        # Extrae datos históricos y proyecciones de la Premier League inglesa (Temporada actual)
+        # Nota: La librería maneja los años en formato corto/largo según la temporada activa.
+        understat = sd.Understat(leagues="ENG-Premier League", seasons=2026) 
         cronograma = understat.read_schedule()
         return cronograma
     except Exception as e:
-        st.error(f"Error al conectar con el servidor de datos: {e}")
+        st.error(f"Error al conectar con la base de datos de fútbol: {e}")
         return pd.DataFrame()
 
-# --- PROCESAMIENTO DE DATOS ---
+# --- PROCESAMIENTO ANALÍTICO ---
 df_partidos = cargar_datos_futbol()
 
 if df_partidos.empty:
-    st.warning("⚠️ No se pudieron recuperar los datos de la liga en este momento.")
+    st.warning("⚠️ No se pudieron recuperar los datos de la liga en este momento. Intenta refrescar la página.")
 else:
-    # 1. Limpieza rápida: Filtrar solo los partidos que aún NO se han jugado (Pre-Partido)
-    # Understat marca los partidos jugados con goles definidos. Filtramos los pendientes:
+    # 1. Filtrar los partidos que aún no tienen goles registrados (Pre-Partido)
     partidos_pendientes = df_partidos[df_partidos['home_goals'].isna()]
     
     if partidos_pendientes.empty:
-        st.info("⚽ Todos los partidos de la temporada actual ya se han jugado. Mostrando últimos encuentros para simulación:")
-        partidos_pendientes = df_partidos.tail(10) # Respaldar con los últimos 10 si la temporada acabó
+        st.info("⚽ No hay encuentros pendientes inmediatos en el feed. Mostrando los últimos de la temporada para simulación:")
+        partidos_pendientes = df_partidos.tail(10)
     
-    # Crear la lista de selección para el usuario
+    # Crear la lista de selección interactiva
     lista_opciones = []
     for idx, row in partidos_pendientes.iterrows():
-        lista_opciones.append(f"{row['home_team']} vs {row['away_team']} (Fecha: {row['date'].strftime('%Y-%m-%d')})")
+        fecha_str = row['date'].strftime('%Y-%m-%d') if pd.notna(row['date']) else "Fecha por confirmar"
+        lista_opciones.append(f"{row['home_team']} vs {row['away_team']} ({fecha_str})")
         
-    partido_elegido = st.selectbox("🎯 Selecciona el próximo encuentro que deseas analizar:", lista_opciones)
+    partido_elegido = st.selectbox("🎯 Selecciona el próximo encuentro que deseas analizar con el modelo:", lista_opciones)
     
     # Extraer los equipos del partido seleccionado
     match_idx = lista_opciones.index(partido_elegido)
@@ -52,36 +65,31 @@ else:
     equipo_local = fila_partido['home_team']
     equipo_visitante = fila_partido['away_team']
     
-    # =========================================================================
-    # 📊 PESTAÑA ÚNICA: ESTUDIO PRE-PARTIDO
-    # =========================================================================
-    st.header(f"🏟️ Análisis de Confrontación: {equipo_local} vs {equipo_visitante}")
+    st.markdown("---")
+    st.header(f"🏟️ Estudio de Confrontación: {equipo_local} vs {equipo_visitante}")
     
-    # 2. CÁLCULO DE MÉTRICAS AVANZADAS (Métricas xG históricas de la temporada)
-    # Calculamos los promedios de Goles Esperados (xG) anotados y concedidos
-    # xG Home anotado
+    # =========================================================================
+    # 📊 BLOQUE 1: EXTRACCIÓN DE MÉTRICAS SOBERMÉTRICAS (xG)
+    # =========================================================================
+    # Calculamos los promedios de Goles Esperados (xG) acumulados en la temporada
     xg_anotado_local = df_partidos[df_partidos['home_team'] == equipo_local]['home_xg'].mean()
-    # xG Home recibido
     xg_concedido_local = df_partidos[df_partidos['home_team'] == equipo_local]['away_xg'].mean()
     
-    # xG Away anotado
     xg_anotado_visita = df_partidos[df_partidos['away_team'] == equipo_visitante]['away_xg'].mean()
-    # xG Away recibido
     xg_concedido_visita = df_partidos[df_partidos['away_team'] == equipo_visitante]['home_xg'].mean()
     
-    # Promedio de xG general de toda la liga (Línea base)
+    # Línea base de la liga
     xg_promedio_liga = df_partidos['home_xg'].mean()
     
-    # Rellenar con valores estándar si es el primer partido del torneo
+    # Asignar valores por defecto seguros en caso de valores nulos (Comienzos de torneo)
     xg_anotado_local = xg_anotado_local if not pd.isna(xg_anotado_local) else 1.35
     xg_concedido_local = xg_concedido_local if not pd.isna(xg_concedido_local) else 1.20
     xg_anotado_visita = xg_anotado_visita if not pd.isna(xg_anotado_visita) else 1.15
     xg_concedido_visita = xg_concedido_visita if not pd.isna(xg_concedido_visita) else 1.40
     xg_promedio_liga = xg_promedio_liga if not pd.isna(xg_promedio_liga) else 1.25
 
-    # 3. INTERFAZ VISUAL DE MÉTRICAS (Mano a Mano)
+    # Visualización en columnas métricas
     c1, c2 = st.columns(2)
-    
     with c1:
         st.subheader(f"🏠 Indicadores de {equipo_local} (Local)")
         st.metric("Peligro Ofensivo (xG Favor Promedio)", f"{xg_anotado_local:.2f}")
@@ -93,23 +101,50 @@ else:
         st.metric("Vulnerabilidad Defensiva (xG Contra Promedio)", f"{xg_concedido_visita:.2f}")
         
     st.markdown("---")
-    st.header("🧮 4. Proyección de Goles del Partido")
-    st.write("Cálculo predictivo cruzando la Fuerza Ofensiva de un equipo contra la Fuerza Defensiva del oponente.")
     
-    # Algoritmo de Proyección de Goles Esperados para este partido específico:
-    # Goles Proyectados = (xG de Ataque del Equipo / Promedio de la liga) * xG de Defensa del Rival
+    # =========================================================================
+    # 🧮 BLOQUE 2: MOTOR DE PROYECCIÓN Y DISTRIBUCIÓN DE POISSON
+    # =========================================================================
+    st.header("🧮 Modelo Matemático Predictivo Avanzado")
+    
+    # Cálculo de la expectativa de goles cruzando fuerzas ofensivas y defensivas
     goles_proyectados_local = (xg_anotado_local / xg_promedio_liga) * xg_concedido_visita
     goles_proyectados_visita = (xg_anotado_visita / xg_promedio_liga) * xg_concedido_local
     
+    # Simulación de matriz de Poisson (Hasta un máximo de 6 goles por equipo para el cálculo)
+    prob_local = 0.0
+    prob_empate = 0.0
+    prob_visitante = 0.0
+    
+    for g_local in range(7):
+        for g_visita in range(7):
+            # Probabilidad conjunta de que el partido quede exactamente con ese marcador
+            p_marcador = poisson.pmf(g_local, goles_proyectados_local) * poisson.pmf(g_visita, goles_proyectados_visita)
+            
+            if g_local > g_visita:
+                prob_local += p_marcador
+            elif g_local < g_visita:
+                prob_visitante += p_marcador
+            else:
+                prob_empate += p_marcador
+
+    # Mostrar la proyección de goles
     col_pred1, col_pred2 = st.columns(2)
     col_pred1.metric(f"Goles Proyectados para {equipo_local}", f"{goles_proyectados_local:.2f}")
     col_pred2.metric(f"Goles Proyectados para {equipo_visitante}", f"{goles_proyectados_visita:.2f}")
     
-    # Diagnóstico final del Analista
-    st.subheader("🎯 Diagnóstico del Modelo Predictivo")
-    if goles_proyectados_local > goles_proyectados_visita + 0.4:
-        st.success(f"🟢 **Alta probabilidad de Victoria Local**. El ataque de {equipo_local} supera con creces las carencias defensivas de {equipo_visitante}.")
-    elif goles_proyectados_visita > goles_proyectados_local + 0.4:
-        st.success(f"🔵 **Alta probabilidad de Victoria Visitante**. {equipo_visitante} tiene las métricas de peligro necesarias para asaltar el estadio local.")
+    # Desplegar los porcentajes probabilísticos en tarjetas estilizadas
+    st.markdown("### 🎯 Probabilidades Porcentuales del Resultado Final")
+    col_p1, col_p2, col_p3 = st.columns(3)
+    col_p1.metric(f"Victoria {equipo_local}", f"{prob_local * 100:.2f}%")
+    col_p2.metric("Empate", f"{prob_empate * 100:.2f}%")
+    col_p3.metric(f"Victoria {equipo_visitante}", f"{prob_visitante * 100:.2f}%")
+    
+    # Diagnóstico descriptivo automático del modelo
+    st.markdown("### 📋 Conclusión del Analista")
+    if prob_local > prob_visitante and prob_local > prob_empate:
+        st.success(f"🟢 El modelo asigna la mayor probabilidad a la **Victoria de {equipo_local}** debido a la consistencia en su generación de xG en casa.")
+    elif prob_visitante > prob_local and prob_visitante > prob_empate:
+        st.info(f"🔵 El escenario más factible es una **Victoria de {equipo_visitante}**. Sus métricas de ataque superan la resistencia defensiva del cuadro local.")
     else:
-        st.warning("🟡 **Tendencia al Empate o Partido Cerrado**. Las fuerzas están sumamente niveladas en las proyecciones analíticas.")
+        st.warning("🟡 El partido presenta una fuerte tendencia al **Empate**. Las fuerzas tácticas y las probabilidades numéricas se encuentran neutralizadas.")
