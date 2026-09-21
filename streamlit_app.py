@@ -1,23 +1,28 @@
-import os
+import subprocess
 import sys
 import streamlit as st
 
 # =========================================================================
-# 🛠️ SISTEMA DE AUTO-INSTALACIÓN DE EMERGENCIA (CORREGIDO)
+# ⚙️ CARGADOR DINÁMICO DE DEPENDENCIAS (BLINDADO)
 # =========================================================================
-# Se ejecuta la importación de streamlit primero para poder usar sus funciones
-# de limpieza de caché de forma segura en caso de que falte alguna librería.
+# Este bloque detecta si las librerías científicas están instaladas.
+# Si faltan, invoca de manera forzada al instalador de Python antes de que
+# la interfaz intente arrancar, evitando colapsos del servidor.
 try:
     import soccerdata as sd
-    import scipy
+    from scipy.stats import poisson
 except ModuleNotFoundError:
-    os.system(f'"{sys.executable}" -m pip install soccerdata understat scipy pandas>=2.0.0')
-    st.cache_data.clear()
+    with st.spinner("📦 Inicializando entorno analítico por primera vez... (Espere 30 segundos)"):
+        # Descarga forzada y silenciosa de paquetes analíticos
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "soccerdata", "understat", "scipy", "pandas>=2.0.0"])
+    st.success("✅ ¡Entorno configurado con éxito! Refrescando interfaz...")
+    st.rerun()
 
-# Una vez aseguradas las instalaciones, importamos el resto de módulos
+# Una vez asegurado el entorno, realizamos las importaciones analíticas
 import pandas as pd
 import soccerdata as sd
 from scipy.stats import poisson
+from datetime import datetime
 
 # Configuración de la interfaz en modo ancho
 st.set_page_config(page_title="Football Analytics Pro", layout="wide", page_icon="⚽")
@@ -26,13 +31,12 @@ st.title("⚽ Sistema Predictivo de Fútbol Profesional (Modelo Poisson & xG)")
 st.markdown("---")
 
 # --- CONEXIÓN Y CARGA DE DATOS OPTIMIZADA ---
-@st.cache_data(ttl=3600)  # Guarda los datos en caché por 1 hora para máxima velocidad
+@st.cache_data(ttl=3600)
 def cargar_datos_futbol():
     try:
-        # Extrae datos históricos y proyecciones de la Premier League inglesa
+        # Se conecta al módulo analítico de Understat para extraer métricas xG masivas
         understat = sd.Understat(leagues="ENG-Premier League", seasons=2026) 
-        cronograma = understat.read_schedule()
-        return cronograma
+        return understat.read_schedule()
     except Exception as e:
         st.error(f"Error al conectar con la base de datos de fútbol: {e}")
         return pd.DataFrame()
@@ -47,7 +51,7 @@ else:
     partidos_pendientes = df_partidos[df_partidos['home_goals'].isna()]
     
     if partidos_pendientes.empty:
-        st.info("⚽ No hay encuentros pendientes inmediatos en el feed. Mostrando los últimos de la temporada para simulación:")
+        st.info("⚽ No hay encuentros pendientes inmediatos. Mostrando los últimos de la temporada para simulación:")
         partidos_pendientes = df_partidos.tail(10)
     
     # Crear la lista de selección interactiva
@@ -101,7 +105,7 @@ else:
     st.markdown("---")
     
     # =========================================================================
-    # 🗂️ BLOQUE 2: MOTOR DE PROYECCIÓN Y DISTRIBUCIÓN DE POISSON
+    # 🧮 BLOQUE 2: MOTOR DE PROYECCIÓN Y DISTRIBUCIÓN DE POISSON
     # =========================================================================
     st.header("🧮 Modelo Matemático Predictivo Avanzado")
     
